@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="450" viewBox="0 0 900 450" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="Claude sessions submit GPU jobs to one gpushift queue, which starts each job when a GPU is free. A hook blocks direct launches. /gpushift:free makes jobs checkpoint and step aside; /gpushift:resume continues them.">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9198a1"/></marker></defs>
+<text x="40" y="26" font-size="11" fill="#9198a1" font-weight="600">CLAUDE SESSIONS</text>
+<text x="360" y="26" font-size="11" fill="#9198a1" font-weight="600">ONE SHARED QUEUE</text>
+<text x="670" y="26" font-size="11" fill="#9198a1" font-weight="600">GPUS</text>
+<rect x="40" y="44" width="170" height="52" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<circle cx="60" cy="70" r="6" fill="#4493f8"/>
+<text x="76" y="67" font-size="14" fill="#e6edf3" font-weight="600">vision</text>
+<text x="76" y="84" font-size="12" fill="#9198a1">Claude session</text>
+<path d="M214,70 C282,70 296,150 352,150" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="40" y="116" width="170" height="52" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<circle cx="60" cy="142" r="6" fill="#ab7df8"/>
+<text x="76" y="139" font-size="14" fill="#e6edf3" font-weight="600">nlp</text>
+<text x="76" y="156" font-size="12" fill="#9198a1">Claude session</text>
+<path d="M214,142 C282,142 296,150 352,150" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="40" y="188" width="170" height="52" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<circle cx="60" cy="214" r="6" fill="#3fb950"/>
+<text x="76" y="211" font-size="14" fill="#e6edf3" font-weight="600">evals</text>
+<text x="76" y="228" font-size="12" fill="#9198a1">Claude session</text>
+<path d="M214,214 C282,214 296,150 352,150" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="222" y="44" font-size="11" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">gpushift submit --one</text>
+<text x="222" y="59" font-size="11" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">-- python train.py</text>
+<rect x="360" y="44" width="240" height="196" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<rect x="376" y="60" width="208" height="38" rx="8" fill="none" stroke="#3fb950" stroke-width="1.5"/>
+<rect x="386" y="71" width="4" height="16" rx="2" fill="#3fb950"/>
+<text x="398" y="84" font-size="13" fill="#e6edf3" font-weight="600">lora</text>
+<text x="572" y="84" font-size="12" fill="#9198a1" text-anchor="end">starts in ~12m</text>
+<rect x="376" y="108" width="208" height="38" rx="8" fill="none" stroke="#d29922" stroke-width="1.5"/>
+<rect x="386" y="119" width="4" height="16" rx="2" fill="#d29922"/>
+<text x="398" y="132" font-size="13" fill="#e6edf3" font-weight="600">llama-sft</text>
+<text x="572" y="132" font-size="12" fill="#9198a1" text-anchor="end">needs both GPUs</text>
+<rect x="376" y="156" width="208" height="38" rx="8" fill="none" stroke="#3d444d" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="376" y="214" font-size="12" fill="#9198a1">In order. Short jobs may use a GPU</text>
+<text x="376" y="230" font-size="12" fill="#9198a1">that would otherwise sit idle.</text>
+<path d="M604,142 C632,142 640,94 662,94" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<path d="M604,142 C632,142 640,196 662,196" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<rect x="670" y="44" width="190" height="94" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="686" y="66" font-size="13" fill="#e6edf3" font-weight="600">GPU 0</text>
+<text x="844" y="66" font-size="12" fill="#9198a1" text-anchor="end">24 GB</text>
+<rect x="686" y="76" width="158" height="38" rx="8" fill="none" stroke="#4493f8" stroke-width="1.5"/>
+<rect x="696" y="87" width="4" height="16" rx="2" fill="#4493f8"/>
+<text x="708" y="96" font-size="13" fill="#e6edf3" font-weight="600">resnet</text>
+<rect x="708" y="103" width="124" height="4" rx="2" fill="#262c36"/>
+<rect x="708" y="103" width="77" height="4" rx="2" fill="#4493f8"/>
+<text x="686" y="130" font-size="10.5" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">CUDA_VISIBLE_DEVICES=0</text>
+<rect x="670" y="146" width="190" height="94" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<text x="686" y="168" font-size="13" fill="#e6edf3" font-weight="600">GPU 1</text>
+<text x="844" y="168" font-size="12" fill="#9198a1" text-anchor="end">24 GB</text>
+<rect x="686" y="178" width="158" height="38" rx="8" fill="none" stroke="#ab7df8" stroke-width="1.5"/>
+<rect x="696" y="189" width="4" height="16" rx="2" fill="#ab7df8"/>
+<text x="708" y="198" font-size="13" fill="#e6edf3" font-weight="600">bert</text>
+<rect x="708" y="205" width="124" height="4" rx="2" fill="#262c36"/>
+<rect x="708" y="205" width="47" height="4" rx="2" fill="#ab7df8"/>
+<text x="686" y="232" font-size="10.5" fill="#9198a1" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">CUDA_VISIBLE_DEVICES=1</text>
+<text x="670" y="262" font-size="12" fill="#9198a1">One job per GPU, so no out-of-memory</text>
+<text x="670" y="278" font-size="12" fill="#9198a1">crashes from two runs sharing one.</text>
+<path d="M125,244 C125,296 420,300 640,300" fill="none" stroke="#f85149" stroke-width="1.5" stroke-dasharray="5 5"/>
+<g stroke="#f85149" stroke-width="2.5"><line x1="636" y1="292" x2="652" y2="308"/><line x1="652" y1="292" x2="636" y2="308"/></g>
+<text x="240" y="320" font-size="12" fill="#f85149">Launching <tspan font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">python train.py</tspan> directly? The gpushift hook blocks it and tells the agent how to queue it.</text>
+<line x1="40" y1="344" x2="860" y2="344" stroke="#3d444d"/>
+<rect x="40" y="372" width="170" height="52" rx="10" fill="#151b23" stroke="#3d444d" stroke-width="1"/>
+<circle cx="60" cy="398" r="6" fill="#f0883e"/>
+<text x="76" y="395" font-size="14" fill="#e6edf3" font-weight="600">you</text>
+<text x="76" y="412" font-size="12" fill="#9198a1">need the GPUs back</text>
+<path d="M214,368 L250,368" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="258" y="372" font-size="13" fill="#f0883e" font-weight="600" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">/gpushift:free</text>
+<text x="396" y="372" font-size="12.5" fill="#e6edf3">Jobs that can checkpoint or restart step back into the queue; the rest pause.</text>
+<path d="M214,396 L250,396" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="258" y="400" font-size="13" fill="#f0883e" font-weight="600" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">/gpushift:resume</text>
+<text x="396" y="400" font-size="12.5" fill="#e6edf3">Jobs continue where they stopped: from a checkpoint, or right where they paused.</text>
+<path d="M214,424 L250,424" fill="none" stroke="#9198a1" stroke-width="1.5" marker-end="url(#arr)"/>
+<text x="258" y="428" font-size="13" fill="#f0883e" font-weight="600" font-family="ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace">automatic</text>
+<text x="396" y="428" font-size="12.5" fill="#e6edf3">Start a game or Blender and the same happens by itself, until you close it.</text>
+</svg>
