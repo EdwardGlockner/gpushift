@@ -1,0 +1,14 @@
+{
+  "name": "gpushift",
+  "description": "gpushift: share one GPU machine between Claude Code agents and yourself.",
+  "owner": {
+    "name": "Edward Glockner"
+  },
+  "plugins": [
+    {
+      "name": "gpushift",
+      "source": "./plugin",
+      "description": "Agents queue GPU work instead of launching it; jobs take turns and step aside when you need the GPUs."
+    }
+  ]
+}
