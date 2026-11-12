@@ -79,7 +79,7 @@ def status(now: float) -> dict:
     ]
     gpu = dict(power_limit_w=151, fan_pct=54, shared=False)
     return {
-        "schema": 1, "mode": "normal", "mode_since": None, "auto_free": None,
+        "schema": 1, "mode": "normal", "mode_since": None,
         "daemon": {"running": True, "pid": 1, "heartbeat_age_s": 0.4},
         "slots": {"total": 4, "used": 4},
         "gpus": [

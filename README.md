@@ -8,12 +8,12 @@
 
 Share one GPU machine between your Claude Code agents and yourself. Agents queue
 their GPU work instead of launching it, so they never crash each other's runs, and
-the queue steps aside when you start a game or Blender.
+the queue steps aside whenever you need the GPUs yourself.
 
 - **One queue for every session.** A Claude Code hook stops agents that launch
   training directly and tells them how to queue it.
-- **The machine is still yours.** Free the GPUs with one command, or just start a
-  game: running jobs save a checkpoint and step aside, and carry on afterwards.
+- **The machine is still yours.** Free the GPUs with one command: running jobs save
+  a checkpoint and step aside, and carry on when you resume.
 - **No idle GPUs.** Jobs run in the order they were queued, but short jobs may fill
   a GPU that would otherwise sit idle, and small jobs share a GPU.
 - **You stay informed.** Agents hear when their jobs end, you get a desktop
@@ -22,7 +22,7 @@ the queue steps aside when you start a game or Blender.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EdwardGlockner/gpushift/main/docs/img/gpushift-dark.svg">
-  <img alt="Claude sessions submit GPU jobs to one shared queue, which runs one job per GPU. A hook blocks direct launches. /gpushift:free makes jobs checkpoint and step aside, /gpushift:resume continues them, and starting a game or Blender does the same automatically." src="https://raw.githubusercontent.com/EdwardGlockner/gpushift/main/docs/img/gpushift-light.svg">
+  <img alt="Claude sessions submit GPU jobs to one shared queue, which runs one job per GPU. A hook blocks direct launches. /gpushift:free makes jobs checkpoint and step aside, and /gpushift:resume continues them." src="https://raw.githubusercontent.com/EdwardGlockner/gpushift/main/docs/img/gpushift-light.svg">
 </picture>
 
 ## Quickstart
@@ -93,10 +93,6 @@ Jobs that can save a checkpoint do so and resume later, restartable jobs start o
 later, and other jobs are paused in place (they keep their GPU memory). Only you can
 free or resume; agents can't.
 
-gpushift also does this on its own: when a program you started uses the GPU heavily
-(a game, Blender, your own training), it frees the GPUs, and it resumes two minutes
-after that program closes.
-
 ## Claude Code plugin
 
 ![An agent runs python train_lora.py; the gpushift hook blocks it and the agent submits it to the queue instead](https://raw.githubusercontent.com/EdwardGlockner/gpushift/main/docs/img/gpushift-hook.gif)
@@ -155,8 +151,7 @@ and [Lightning](examples/lightning_resumable.py).
 ## Configuration
 
 Nothing needs configuring. To change something, run `gpushift config --edit`: the
-file explains every setting, such as which GPUs to use, which programs count as a game,
-the dashboard port, and whether Claude sessions take turns instead of first come,
+file explains every setting, such as which GPUs to use, the dashboard port, and whether Claude sessions take turns instead of first come,
 first served.
 
 ## How it works

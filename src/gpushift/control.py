@@ -162,22 +162,18 @@ def cancel(con, job_id: int) -> str:
 # ---------------------------------------------------------------- free / resume
 
 
-def free(con, soft: bool, auto: dict | None = None) -> dict:
+def free(con, soft: bool) -> dict:
     """Stop the queue and free the machine.
 
     full: resumable jobs are asked to checkpoint and exit, restartable jobs are
           stopped (both are requeued at the front); others are frozen.
-    soft: everything is frozen; VRAM stays allocated.
-    auto: set when the daemon frees because the user runs heavy GPU programs
-          ({"apps": [...]}); only such a free is resumed automatically."""
+    soft: everything is frozen; VRAM stays allocated."""
     now = time.time()
     with db.tx(con):
         prev = db.get_mode(con)
         db.set_kv(con, "mode", "soft" if soft else "free")
         if prev == "normal":
             db.set_kv(con, "mode_since", now)
-        # A manual free (even during an automatic one) stays until the user resumes.
-        db.set_kv(con, "auto_free", auto)
         jobs = db.active(con)
     rep = {
         "previous_mode": prev,
@@ -242,15 +238,11 @@ def free(con, soft: bool, auto: dict | None = None) -> dict:
     return rep
 
 
-def resume(con, auto: bool = False) -> dict:
-    """Leave free mode. A manual resume during an automatic free also tells
-    the daemon not to free again until the user's GPU programs have closed."""
+def resume(con) -> dict:
+    """Leave free mode."""
     with db.tx(con):
         prev = db.get_mode(con)
         db.set_kv(con, "mode", "normal")
-        if db.get_kv(con, "auto_free") and not auto:
-            db.set_kv(con, "auto_free_snooze", True)
-        db.set_kv(con, "auto_free", None)
         jobs = db.active(con)
     rep = {"previous_mode": prev, "resumed": [], "evicting": []}
     now = time.time()

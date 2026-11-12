@@ -24,6 +24,7 @@ import re
 import socket
 import socketserver
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -32,6 +33,15 @@ from . import config, control, db, paths
 log = logging.getLogger("gpushift.daemon")
 PAGE = Path(__file__).with_name("ui.html")
 RECENT = 10  # finished jobs the dashboard lists
+VIEWING = 60.0  # seconds after the last status request that the dashboard counts as open
+last_viewed = 0.0  # when the dashboard last asked for the status
+
+
+def being_viewed() -> bool:
+    """Whether a dashboard is open (it asks for the status every 2 s)."""
+    return time.time() - last_viewed < VIEWING
+
+
 LOG_TAIL = 64 * 1024  # bytes of a job's log the dashboard shows
 
 
@@ -117,6 +127,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path in ("/", "/index.html"):
                 return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             if self.path == "/api/status":
+                global last_viewed
+                last_viewed = time.time()
                 return self._json(200, status_payload())
             m = re.fullmatch(r"/api/log/(\d+)", self.path)
             if m:

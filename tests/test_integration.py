@@ -454,59 +454,6 @@ def test_memory_need_is_learned_from_earlier_runs(q):
     assert need == int(2000 * control.PACK_MARGIN + control.PACK_EXTRA_MB)
 
 
-AUTO_FREE_CONFIG = "[auto_free]\nafter = 1\nresume_after = 1\ninclude_agents = true\n"
-
-
-def _user_program(q):
-    """A program the user runs that holds 3 GB of GPU memory."""
-    p = subprocess.Popen([PY, "-c", "import time; time.sleep(120)"])
-    q.set_gpu_procs({p.pid: 3000})
-    return p
-
-
-def _mode(q):
-    from gpushift import db
-
-    return db.get_mode(q.con)
-
-
-def test_gpus_are_freed_while_the_user_runs_a_heavy_gpu_program(q):
-    q.write_config(AUTO_FREE_CONFIG)
-    jid = q.submit("--one", *ticker())
-    q.wait_for(lambda: q.job(jid)["pid"], what="pid")
-    prog = _user_program(q)
-    try:
-        q.wait_for(lambda: _mode(q) == "free", 15, "automatic free")
-        assert q.state(jid) == "frozen"
-        s = json.loads(q.gpushift("status", "--json").stdout)
-        assert s["auto_free"]["apps"]
-    finally:
-        prog.kill()
-    q.set_gpu_procs({})
-    q.wait_for(lambda: _mode(q) == "normal", 15, "automatic resume")
-    q.wait_state(jid, "running")
-
-
-def test_manual_resume_during_auto_free_is_respected(q):
-    q.write_config(AUTO_FREE_CONFIG)
-    prog = _user_program(q)
-    try:
-        q.wait_for(lambda: _mode(q) == "free", 15, "automatic free")
-        q.gpushift("resume")
-        time.sleep(2.5)
-        assert _mode(q) == "normal"  # not freed again while that program keeps running
-    finally:
-        prog.kill()
-        q.set_gpu_procs({})
-
-
-def test_manual_free_is_not_resumed_automatically(q):
-    q.write_config(AUTO_FREE_CONFIG)
-    q.gpushift("free")
-    time.sleep(2.5)
-    assert _mode(q) == "free"
-
-
 def test_dashboard(q, tmp_path):
     import socket
     import urllib.error

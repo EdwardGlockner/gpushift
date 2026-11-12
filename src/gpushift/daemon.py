@@ -14,19 +14,9 @@ import sys
 import time
 from pathlib import Path
 
-import psutil
-
 from . import _proc, config, control, cpustat, db, gpumem, gpus, notify, paths, scheduler
 
 log = logging.getLogger("gpushift.daemon")
-
-
-def _started_by_agent(p: psutil.Process) -> bool:
-    """True if a Claude Code session started this process (an agent, not the user)."""
-    try:
-        return any(a.name().lower().startswith("claude") for a in p.parents())
-    except psutil.Error:
-        return False
 
 
 TICK = float(os.environ.get("GPUSHIFT_TICK", "1.0"))
@@ -149,9 +139,9 @@ class Daemon:
         self.last_gpu_poll = 0.0
         self.procs: dict[int, int] | None = None  # pid -> GPU MiB, from the last poll
         self.capacity: dict[int, int] | None = None  # MiB per GPU packed jobs may book
-        self.user_since: float | None = None  # when heavy user GPU programs were first seen
-        self.user_gone_since: float | None = None  # when the last one closed
         self.cpu = cpustat.Sampler()
+        self.snap: _proc.Snapshot | None = None  # process tree, taken once per poll
+        self.job_pids: dict[int, set[int]] = {}  # job id -> its processes (runner and job), per poll
 
     def _cfg_mtime(self) -> float:
         try:
@@ -184,89 +174,41 @@ class Daemon:
         except gpus.GPUQueryError as e:
             log.warning("%s", e)
         self.procs = gpumem.per_process()
+        self.read_job_processes()
         self.measure_jobs()
-        self.watch_user()
         self.poll_cpu()
 
-    def poll_cpu(self) -> None:
-        job_of = {}
+    def read_job_processes(self) -> None:
+        """One process snapshot per poll, and the processes of each active job
+        (its runner and everything under it)."""
+        try:
+            self.snap = _proc.Snapshot()
+        except Exception:  # never let a reading stop the scheduler
+            log.exception("process snapshot failed")
+            self.snap, self.job_pids = None, {}
+            return
+        self.job_pids = {}
         for j in db.active(self.con):
-            p = _proc.get_proc(j["pid"], j["pid_ctime"])
-            if p is not None:
-                job_of.update({q.pid: j["id"] for q in _proc.tree(p)})
+            pids: set[int] = set()
+            for pid, ctime in ((j["runner_pid"], j["runner_ctime"]), (j["pid"], j["pid_ctime"])):
+                if _proc.get_proc(pid, ctime) is not None:
+                    pids.update(self.snap.tree(pid))
+            self.job_pids[j["id"]] = pids
+
+    def poll_cpu(self) -> None:
+        """CPU, memory and disk readings. Only the dashboard shows them, so they
+        are only taken while one is open."""
+        from . import ui
+
+        if not ui.being_viewed():
+            return
+        job_of = {}
+        for jid, pids in self.job_pids.items():
+            job_of.update(dict.fromkeys(pids, jid))
         try:
             db.set_kv(self.con, "cpu_state", self.cpu.sample(job_of))
         except Exception:  # a dashboard reading must never stop the scheduler
             log.exception("cpu reading failed")
-
-    # -- the user's own GPU programs (games, Blender, ...)
-
-    def user_gpu_programs(self) -> list[str]:
-        """Names of heavy GPU programs running outside gpushift."""
-        af = self.cfg.auto_free
-        if not self.procs:
-            return []
-        ours: set[int] = set()
-        for j in db.active(self.con):
-            for pid, ctime in ((j["pid"], j["pid_ctime"]), (j["runner_pid"], j["runner_ctime"])):
-                p = _proc.get_proc(pid, ctime)
-                if p is not None:
-                    ours.update(q.pid for q in _proc.tree(p))
-        found = set()
-        for pid, mib in self.procs.items():
-            if pid in ours or mib <= 0:
-                continue
-            try:
-                p = psutil.Process(pid)
-                name = p.name()
-            except psutil.Error:
-                continue
-            listed = name.lower() in af.apps
-            if not listed and (name.lower() in af.ignore or mib < af.min_vram_mb):
-                continue
-            if not af.include_agents and _started_by_agent(p):
-                continue
-            found.add(name)
-        return sorted(found)
-
-    def watch_user(self) -> None:
-        """Free the GPUs while the user runs heavy GPU programs; resume once
-        they have been closed for a while (only after a free we did ourselves)."""
-        af = self.cfg.auto_free
-        if not af.enabled:
-            return
-        now = time.time()
-        apps = self.user_gpu_programs()
-        mode = db.get_mode(self.con)
-        auto = db.get_kv(self.con, "auto_free")
-        if apps:
-            self.user_gone_since = None
-            if self.user_since is None:
-                self.user_since = now
-            snoozed = db.get_kv(self.con, "auto_free_snooze")
-            if mode == "normal" and not snoozed and now - self.user_since >= af.after:
-                log.info("freeing the GPUs: %s is using the GPU", ", ".join(apps))
-                control.free(self.con, soft=False, auto={"apps": apps, "since": now})
-                notify.desktop(
-                    "gpushift: GPUs freed for you",
-                    f"{', '.join(apps)} is using the GPU. The queue waits until it has been closed for a while.",
-                )
-            elif auto and auto.get("apps") != apps:
-                db.set_kv(self.con, "auto_free", {**auto, "apps": apps})
-            return
-        self.user_since = None
-        if db.get_kv(self.con, "auto_free_snooze"):
-            db.set_kv(self.con, "auto_free_snooze", None)
-        if mode == "normal" or not auto:
-            self.user_gone_since = None
-            return
-        if self.user_gone_since is None:
-            self.user_gone_since = now
-        if now - self.user_gone_since >= af.resume_after:
-            log.info("resuming: %s closed", ", ".join(auto.get("apps") or []))
-            control.resume(self.con, auto=True)
-            self.user_gone_since = None
-            notify.desktop("gpushift: queue resumed", f"{', '.join(auto.get('apps') or ['Your GPU program'])} closed.")
 
     def measure_jobs(self) -> None:
         """Record how much GPU memory each running job uses (and its peak),
@@ -278,10 +220,10 @@ class Daemon:
         active = db.active(self.con)
         job_vram = {}
         for j in active:
-            p = _proc.get_proc(j["pid"], j["pid_ctime"])
-            if p is None:
+            pids = self.job_pids.get(j["id"])
+            if not pids:
                 continue
-            mib = sum(self.procs.get(q.pid, 0) for q in _proc.tree(p))
+            mib = sum(self.procs.get(pid, 0) for pid in pids)
             job_vram[j["id"]] = mib
             if mib > (j["peak_vram_mb"] or 0) and j["state"] == "running":
                 with db.tx(self.con):

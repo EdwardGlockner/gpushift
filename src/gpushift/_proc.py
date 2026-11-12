@@ -60,7 +60,8 @@ def get_proc(pid: int | None, ctime: float | None = None) -> psutil.Process | No
         p = psutil.Process(pid)
         if ctime and abs(p.create_time() - ctime) > 1.0:
             return None
-        if p.status() == psutil.STATUS_ZOMBIE:
+        # Zombies only exist on POSIX; on Windows status() scans every process.
+        if not IS_WINDOWS and p.status() == psutil.STATUS_ZOMBIE:
             return None
         return p
     except psutil.Error:
@@ -83,6 +84,49 @@ def tree(p: psutil.Process) -> list[psutil.Process]:
         return [p, *p.children(recursive=True)]
     except psutil.Error:
         return [p]
+
+
+class Snapshot:
+    """Parent links of all processes, read once. On Windows every psutil
+    children()/parents() call scans the whole process list, so the daemon
+    takes one snapshot per poll and answers all its tree questions from it."""
+
+    def __init__(self):
+        links = None
+        fast = getattr(psutil._psplatform, "ppid_map", None)  # one scan; not public API, so optional
+        if fast is not None:
+            try:
+                links = dict(fast())
+            except Exception:
+                links = None
+        if links is None:
+            links = {p.pid: p.info["ppid"] for p in psutil.process_iter(["ppid"])}
+        self.parent: dict[int, int] = links
+        self.kids: dict[int, list[int]] = {}
+        for pid, ppid in links.items():
+            if ppid != pid:
+                self.kids.setdefault(ppid, []).append(pid)
+
+    def tree(self, pid: int) -> list[int]:
+        """pid and all its descendants."""
+        out, todo, seen = [], [pid], set()
+        while todo:
+            p = todo.pop()
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+            todo.extend(self.kids.get(p, ()))
+        return out
+
+    def ancestors(self, pid: int) -> list[int]:
+        out, seen = [], {pid}
+        p = self.parent.get(pid)
+        while p and p not in seen:
+            seen.add(p)
+            out.append(p)
+            p = self.parent.get(p)
+        return out
 
 
 def suspend_tree(pid: int | None, ctime: float | None = None) -> bool:

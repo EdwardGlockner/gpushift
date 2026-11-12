@@ -27,29 +27,6 @@ class HookConfig:
     deny: list[str] = field(default_factory=list)  # extra regexes that are always blocked
 
 
-# Programs that use the GPU all the time without being "heavy" GPU work.
-DEFAULT_IGNORE = [
-    "dwm.exe", "explorer.exe", "csrss.exe", "searchapp.exe", "searchhost.exe", "shellexperiencehost.exe",
-    "startmenuexperiencehost.exe", "textinputhost.exe", "lockapp.exe", "applicationframehost.exe",
-    "chrome.exe", "msedge.exe", "msedgewebview2.exe", "firefox.exe", "brave.exe", "opera.exe",
-    "discord.exe", "code.exe", "slack.exe", "teams.exe", "ms-teams.exe", "spotify.exe", "steamwebhelper.exe",
-    "xorg", "gnome-shell", "kwin_x11", "kwin_wayland", "plasmashell", "windowserver",
-]  # fmt: skip
-
-
-@dataclass
-class AutoFreeConfig:
-    """Free the GPUs while the user runs heavy GPU programs (games, Blender, ...)."""
-
-    enabled: bool = True
-    apps: list[str] = field(default_factory=list)  # always count these programs (any GPU memory)
-    ignore: list[str] = field(default_factory=lambda: list(DEFAULT_IGNORE))
-    min_vram_mb: int = 1024  # other programs count once they use this much GPU memory
-    after: int = 10  # seconds a program must keep using the GPU before gpushift frees it
-    resume_after: int = 120  # seconds after the last such program exits before gpushift resumes
-    include_agents: bool = False  # also count programs started by Claude Code sessions
-
-
 @dataclass
 class Config:
     gpus: list[int]  # GPU indices gpushift may use
@@ -65,7 +42,6 @@ class Config:
     notify_desktop: str = "failures"  # all | failures | off
     ui_port: int = 8237  # web dashboard on 127.0.0.1; 0 turns it off
     hook: HookConfig = field(default_factory=HookConfig)
-    auto_free: AutoFreeConfig = field(default_factory=AutoFreeConfig)
     detected: list[gpus_mod.GPU] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict:
@@ -150,21 +126,6 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
     if not isinstance(ui_port, int) or not 0 <= ui_port <= 65535:
         raise ConfigError("ui_port must be a port number (0 turns the dashboard off)")
 
-    af = raw.get("auto_free", {}) or {}
-    d = AutoFreeConfig()
-    auto_free = AutoFreeConfig(
-        enabled=bool(af.get("enabled", d.enabled)),
-        apps=[str(a).lower() for a in af.get("apps", d.apps)],
-        ignore=[str(a).lower() for a in af.get("ignore", d.ignore)],
-        min_vram_mb=af.get("min_vram_mb", d.min_vram_mb),
-        after=af.get("after", d.after),
-        resume_after=af.get("resume_after", d.resume_after),
-        include_agents=bool(af.get("include_agents", d.include_agents)),
-    )
-    for k in ("min_vram_mb", "after", "resume_after"):
-        v = getattr(auto_free, k)
-        if not isinstance(v, int) or v < 0:
-            raise ConfigError(f"[auto_free] {k} must be a whole number >= 0")
     return Config(
         gpus=list(vis),
         slots=slots,
@@ -179,7 +140,6 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
         notify_desktop=notify_desktop,
         ui_port=ui_port,
         hook=hook,
-        auto_free=auto_free,
         detected=[g for g in detected if g.index in vis],
     )
 
@@ -246,19 +206,6 @@ def template(detected: list[gpus_mod.GPU]) -> str:
 [notify]
 # Desktop notifications when jobs end: "all", "failures" or "off".
 # desktop = "failures"
-
-[auto_free]
-# Free the GPUs while you run heavy GPU programs yourself (games, Blender, ...),
-# and resume when they have been closed for a while.
-# enabled = true
-# Programs that always count, whatever GPU memory they use:
-# apps = ["blender.exe", "Overwatch.exe"]
-# Other programs count once they use this much GPU memory (MB):
-# min_vram_mb = 1024
-# Seconds a program must keep going before gpushift frees, and seconds after the
-# last one exits before gpushift resumes:
-# after = 10
-# resume_after = 120
 
 [hook]
 # The Claude Code hook that redirects direct GPU launches to `gpushift submit`.

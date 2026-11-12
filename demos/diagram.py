@@ -41,7 +41,7 @@ THEMES = {
 }
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
 MONO = "ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace"
-W, H = 900, 450
+W, H = 900, 440
 
 
 class Svg:
@@ -159,7 +159,6 @@ def svg(t: dict) -> str:
     for y, cmd, desc in (
         (372, "/gpushift:free", "Jobs that can checkpoint or restart step back into the queue; the rest pause."),
         (400, "/gpushift:resume", "Jobs continue where they stopped: from a checkpoint, or right where they paused."),
-        (428, "automatic", "Start a game or Blender and the same happens by itself, until you close it."),
     ):
         s.arrow(f"M214,{y - 4} L250,{y - 4}", head=True)
         s.text(258, y, cmd, size=13, color="you", weight="600", mono=True)

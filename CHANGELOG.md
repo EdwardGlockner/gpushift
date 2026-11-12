@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Removed automatic free mode (freeing the GPUs while you run a game or other
+  heavy GPU program). Free and resume by hand with `gpushift free` / `resume`.
+- The daemon uses about a quarter of the CPU it did on Windows.
+
 ## 0.1.1 (2026-11-12)
 
 - Agents are now woken when their jobs end, even if they were idle: `gpushift wait`

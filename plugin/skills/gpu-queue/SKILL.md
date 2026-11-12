@@ -116,9 +116,7 @@ Job states: `queued`, `running`, `frozen` (paused by the user's free mode; it
 continues later), `evicting` (checkpointing so the user can use the GPUs),
 `done`, `failed`, `cancelled`.
 
-If `mode` isn't `normal`, the user has freed the machine, by hand or automatically
-because they're using the GPU themselves (`auto_free` then names the program).
-Your job will wait and continue afterwards; don't try to work around it. If
+If `mode` isn't `normal`, the user has freed the machine. Your job will wait and continue afterwards; don't try to work around it. If
 `daemon.running` is false, tell the user (they can run `gpushift start`).
 
 Jobs run first come, first served, but a short job may run before a long one

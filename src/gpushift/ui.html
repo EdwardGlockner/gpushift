@@ -256,9 +256,9 @@ function gpuCard(g, jobs) {
 
 const loadColor = (p) => (p >= 90 ? "var(--bad)" : p >= 70 ? "var(--warn)" : "var(--accent)");
 
-function cpuCard(c, jobs) {
+function cpuCard(c, jobs, daemonUp) {
   const jobsHtml = jobs.map(jobCard).join("");
-  if (!c) return `<div class="card"><div class="top"><b>CPU</b></div><div class="empty">No reading: the gpushift daemon isn't running.</div>${jobsHtml}</div>`;
+  if (!c) return `<div class="card"><div class="top"><b>CPU</b></div><div class="empty">${daemonUp ? "Measuring…" : "No reading: the gpushift daemon isn't running."}</div>${jobsHtml}</div>`;
   const busy = c.load_pct >= 90;
   const memPct = (100 * c.mem_used_mb) / (c.mem_total_mb || 1);
   return `<div class="card"><div class="top"><b>CPU · ${c.cores_pct.length} cores</b>
@@ -295,8 +295,8 @@ const shortPath = (p) => {
   return (p.startsWith("/") ? "/" : "") + [parts[0], "…", ...parts.slice(-2)].join(sep);
 };
 
-function storageCard(c) {
-  if (!c || !c.disks) return `<div class="card"><div class="top"><b>Storage</b></div><div class="empty">No reading: the gpushift daemon isn't running.</div></div>`;
+function storageCard(c, daemonUp) {
+  if (!c || !c.disks) return `<div class="card"><div class="top"><b>Storage</b></div><div class="empty">${daemonUp ? "Measuring…" : "No reading: the gpushift daemon isn't running."}</div></div>`;
   const rows = c.disks.map((d) => {
     const pct = (100 * d.used_mb) / (d.total_mb || 1), low = lowDrive(d);
     return `<div class="drive" title="${esc(d.mount)}: ${size(d.used_mb)} of ${size(d.total_mb)} used${low ? " (almost full)" : ""}">
@@ -379,7 +379,7 @@ function render(s) {
   const free = s.mode !== "normal";
   const mode = $("mode");
   mode.className = "pill " + (free ? "free" : "normal");
-  mode.textContent = !free ? "running" : s.auto_free ? `paused: ${(s.auto_free.apps || []).join(", ")} is using the GPU` : "paused (free mode)";
+  mode.textContent = !free ? "running" : "paused (free mode)";
   const meta = [`${s.running.length} running`, `${s.queue.length} waiting`];
   if (!s.daemon.running) meta.push("the gpushift daemon is NOT running (gpushift start)");
   $("meta").textContent = meta.join(" · ");
@@ -391,7 +391,7 @@ function render(s) {
   let html = s.gpus.map((g) => gpuCard(g, g.jobs.map((id) => byId[id]).filter(Boolean))).join("");
   $("gpus").innerHTML = html;
   $("timeline").innerHTML = timelineView(s);
-  $("system").innerHTML = cpuCard(s.cpu, s.running.filter((j) => !j.gpus.length)) + storageCard(s.cpu);
+  $("system").innerHTML = cpuCard(s.cpu, s.running.filter((j) => !j.gpus.length), s.daemon.running) + storageCard(s.cpu, s.daemon.running);
 
   $("qhead").textContent = `Queue (${s.queue.length} waiting)`;
   const queue = [...s.queue].sort((a, b) => a.turn - b.turn);

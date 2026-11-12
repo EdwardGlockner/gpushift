@@ -410,7 +410,6 @@ def status_data(con, cfg) -> dict:
         "schema": 1,
         "mode": mode,
         "mode_since": iso(db.get_kv(con, "mode_since")) if mode != "normal" else None,
-        "auto_free": db.get_kv(con, "auto_free") if mode != "normal" else None,
         "daemon": {
             "running": daemon.is_running(),
             "pid": db.get_kv(con, "daemon_pid"),
@@ -441,9 +440,6 @@ def cmd_status(a) -> int:
         "free": "FREE (queue paused, machine freed)",
         "soft": "FREE --soft (queue paused, jobs frozen)",
     }[mode]
-    if mode != "normal" and s.get("auto_free"):
-        apps = ", ".join(s["auto_free"].get("apps") or [])
-        mode_txt = f"FREE (automatic: {apps} is using the GPU; resumes after it closes)"
     dm = "running" if s["daemon"]["running"] else "NOT RUNNING (`gpushift start`)"
     print(f"gpushift  mode: {mode_txt}  |  daemon: {dm}  |  slots: {s['slots']['used']}/{s['slots']['total']} used")
     print()

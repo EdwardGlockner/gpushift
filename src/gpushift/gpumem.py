@@ -6,8 +6,7 @@
 * ``GPUSHIFT_FAKE_GPU_PROCS=<file.json>`` ({"pid": MiB, ...}) replaces both
   (tests use it).
 
-Used to learn how much memory jobs need (packing) and to notice heavy GPU
-programs the user runs (auto free).
+Used to learn how much memory jobs need, so jobs with a known need can share a GPU.
 """
 
 from __future__ import annotations
