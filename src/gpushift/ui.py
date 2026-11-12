@@ -3,9 +3,11 @@ in a thread. `gpushift ui` opens it.
 
 GET  /              the page (ui.html)
 GET  /api/status    `gpushift status --json` plus per-job GPU memory
+GET  /api/log/<id>  the end of a job's log
 POST /api/free      {"soft": bool}
 POST /api/resume
-POST /api/cancel/<id>, /api/priority/<id>, /api/retry/<id>
+POST /api/cancel/<id>, /api/priority/<id>
+POST /api/move/<id>  {"before": <id> | null}  (null: to the end)
 
 POSTs must carry the header ``X-Gpushift: 1``; browsers can't add it to requests
 from other sites, so other web pages can't drive the queue. The Host header
@@ -17,24 +19,49 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import config, control, db
+from . import config, control, db, paths
 
 log = logging.getLogger("gpushift.daemon")
 PAGE = Path(__file__).with_name("ui.html")
+RECENT = 10  # finished jobs the dashboard lists
+LOG_TAIL = 64 * 1024  # bytes of a job's log the dashboard shows
+
+
+def log_tail(job_id: int) -> dict:
+    """The last lines of a job's log (at most LOG_TAIL bytes)."""
+    f = paths.log_file(job_id)
+    try:
+        with open(f, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - LOG_TAIL))
+            text = fh.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return {"id": job_id, "path": str(f), "text": "", "truncated": False}
+    lines = text.split("\n")
+    if size > LOG_TAIL:
+        lines = lines[1:]  # the first line is cut off
+    # Progress bars redraw a line with \r: keep what the line shows last.
+    lines = [ln.rstrip("\r").rsplit("\r", 1)[-1] for ln in lines]
+    text = "\n".join(lines)
+    return {"id": job_id, "path": str(f), "text": text, "truncated": size > LOG_TAIL}
 
 
 def status_payload() -> dict:
-    from .cli import status_data
+    from .cli import job_public, status_data
 
     cfg = config.load()
     con = db.connect()
     s = status_data(con, cfg)
     s.pop("_est", None)
+    s["recent"] = [job_public(con, j) for j in db.recent(con, RECENT)]
     vram = db.get_kv(con, "job_vram") or {}
     for j in s["running"]:
         j["vram_now_mb"] = vram.get(str(j["id"]))
@@ -49,25 +76,19 @@ def _act(path: str, body: dict) -> dict:
         return {"ok": True, "report": rep}
     if path == "/api/resume":
         return {"ok": True, "report": control.resume(con)}
-    m = re.fullmatch(r"/api/(cancel|priority|retry)/(\d+)", path)
+    m = re.fullmatch(r"/api/move/(\d+)", path)
+    if m:
+        before = body.get("before")
+        msg = control.move(con, int(m.group(1)), None if before is None else int(before))
+        return {"ok": "moved" in msg, "message": msg, "error": msg}
+    m = re.fullmatch(r"/api/(cancel|priority)/(\d+)", path)
     if not m:
         return {"ok": False, "error": "unknown action"}
     action, jid = m.group(1), int(m.group(2))
     if action == "cancel":
         return {"ok": True, "message": control.cancel(con, jid)}
-    with db.tx(con):
-        j = db.get_job(con, jid)
-        if j is None:
-            return {"ok": False, "error": f"job {jid} not found"}
-        if action == "priority":
-            if j["state"] != "queued":
-                return {"ok": False, "error": f"job {jid} is {j['state']}, not queued"}
-            db.update(con, jid, position=db.front_position(con), prio=1)
-            return {"ok": True, "message": f"job {jid} moved to the front"}
-        keep = ("preset", "n_gpus", "slots", "exclusive", "shared", "argv", "command", "shell", "cwd", "env", "tag",
-                "project", "session", "eta_seconds", "resumable", "restartable", "vram_mb")  # fmt: skip
-        new = db.insert_job(con, state="queued", position=db.back_position(con), **{k: j[k] for k in keep})
-    return {"ok": True, "message": f"job {new} queued (retry of job {jid})"}
+    msg = control.to_front(con, jid)
+    return {"ok": "moved" in msg, "message": msg, "error": msg}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -100,6 +121,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             if self.path == "/api/status":
                 return self._json(200, status_payload())
+            m = re.fullmatch(r"/api/log/(\d+)", self.path)
+            if m:
+                return self._json(200, log_tail(int(m.group(1))))
             return self._json(404, {"error": "not found"})
         except Exception as e:
             log.exception("ui: GET %s failed", self.path)
@@ -118,10 +142,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {"ok": False, "error": str(e)})
 
 
+class Server(ThreadingHTTPServer):
+    # On Windows, SO_REUSEADDR lets a second process bind the same port and
+    # take over the dashboard; ask for the port exclusively instead.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(port: int) -> ThreadingHTTPServer | None:
     """Start the dashboard in a background thread. None if the port is taken."""
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        srv = Server(("127.0.0.1", port), Handler)
     except OSError as e:
         log.warning("dashboard not started on port %s: %s", port, e)
         return None

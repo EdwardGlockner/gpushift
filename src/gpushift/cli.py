@@ -96,10 +96,7 @@ def trunc(s: str, n: int) -> str:
 
 
 def job_public(con, j: dict) -> dict:
-    now = time.time()
-    runtime = j["total_runtime"]
-    if j["state"] in db.ACTIVE and j["started_at"]:
-        runtime += now - j["started_at"]
+    runtime = control.ran(j)
     return {
         "id": j["id"],
         "state": j["state"],
@@ -115,6 +112,7 @@ def job_public(con, j: dict) -> dict:
         "submitted_at": iso(j["submitted_at"]),
         "started_at": iso(j["started_at"]),
         "ended_at": iso(j["ended_at"]),
+        "frozen_at": iso(j["frozen_at"]),
         "runtime_s": round(runtime),
         "exit_code": j["exit_code"],
         "eta_s": j["eta_seconds"],
@@ -125,6 +123,7 @@ def job_public(con, j: dict) -> dict:
         "peak_vram_mb": j["peak_vram_mb"],
         "evictions": j["evictions"],
         "resume": bool(j["resume"]),
+        "after": j.get("after_ids") or [],
         "log": str(paths.log_file(j["id"])),
         "note": j["note"],
     }
@@ -264,6 +263,7 @@ def cmd_submit(a) -> int:
         cmd, shell = [bash, "-c", cmd[0]], False
     project = project_name(cwd)
     con = db.connect()
+    after = parse_after(con, a.after)
     with db.tx(con):
         pos = db.front_position(con) if a.priority else db.back_position(con)
         jid = db.insert_job(
@@ -288,14 +288,15 @@ def cmd_submit(a) -> int:
             resumable=int(a.resumable),
             restartable=int(a.restartable),
             vram_mb=parse_size(a.vram) if a.vram else None,
+            after_ids=after or None,
         )
     paths.job_dir(jid).mkdir(parents=True, exist_ok=True)
     if not a.no_start:
         ensure_daemon(quiet=a.json)
 
-    queue = control.ordered_queue(con, cfg.fair_share)
+    queue, starts = control.queue_and_starts(con, cfg)
     position = next((i + 1 for i, q in enumerate(queue) if q["id"] == jid), None)
-    est = control.estimate_starts(con, control.live_machine(cfg), cfg.starvation_guard, cfg.fair_share).get(jid)
+    est = starts.get(jid)
     mode = db.get_mode(con)
     if a.json:
         _print_json(
@@ -319,22 +320,62 @@ def cmd_submit(a) -> int:
     print(
         f"job {jid} queued ({preset}: {desc}, {req['slots']} slot{'s' if req['slots'] != 1 else ''}) tag={a.tag or project}"
     )
-    print(f"position {position} of {len(queue)}, estimated start: {fmt_start(est, mode)}")
+    waits = next((q["waiting_for"] for q in queue if q["id"] == jid), [])
+    if waits:
+        print(f"position {position} of {len(queue)}; starts after job {', '.join(map(str, waits))} has finished")
+    else:
+        print(f"position {position} of {len(queue)}, estimated start: {fmt_start(est, mode)}")
     if mode != "normal":
         print("note: the queue is paused (free mode); it will start after `gpushift resume`")
     print(f"logs: gpushift logs {jid} -f")
     return 0
 
 
+def parse_after(con, values: list[str] | None) -> list[int]:
+    """--after 12 --after 13,14 -> [12, 13, 14], checking that each job exists
+    and can still finish successfully."""
+    ids: list[int] = []
+    for v in values or []:
+        for part in v.replace(" ", "").split(","):
+            if not part:
+                continue
+            if not part.isdigit():
+                raise CLIError(f"--after takes job ids, e.g. --after 12 or --after 12,13 (got {part!r})")
+            ids.append(int(part))
+    for i in dict.fromkeys(ids):
+        j = db.get_job(con, i)
+        if j is None:
+            raise CLIError(f"--after {i}: there is no job {i}")
+        if j["state"] in ("failed", "cancelled"):
+            raise CLIError(f"--after {i}: job {i} {j['state']}, so this job would never run")
+    return list(dict.fromkeys(ids))
+
+
+def timeline(con, running: list[dict], queue: list[dict], placed: dict) -> dict:
+    """What runs on which GPU and when: running jobs (end = expected end or
+    None) and the queued jobs the forecast can place. Times are unix seconds."""
+    now = time.time()
+    items = []
+    for j in running:
+        left = control.time_left(con, j, now)
+        items.append(
+            {"id": j["id"], "gpus": j["gpus"] or [], "start": j["started_at"], "end": None if left is None else now + left,
+             "state": j["state"]}
+        )  # fmt: skip
+    for j in queue:
+        if j["id"] in placed:
+            start, gpus, end = placed[j["id"]]
+            items.append({"id": j["id"], "gpus": gpus, "start": start, "end": end, "state": "queued"})
+    unplaced = [j["id"] for j in queue if j["id"] not in placed]
+    return {"now": now, "items": items, "unplaced": unplaced}
+
+
 def status_data(con, cfg) -> dict:
     mode = db.get_mode(con)
     running = db.active(con)
-    queue = control.ordered_queue(con, cfg.fair_share)
-    est = control.estimate_starts(con, control.live_machine(cfg), cfg.starvation_guard, cfg.fair_share)
-    try:
-        live = {g.index: g for g in gpus.query()}
-    except gpus.GPUQueryError:
-        live = {}
+    placed: dict = {}
+    queue, est = control.queue_and_starts(con, cfg, placed)
+    live = {g.index: g for g in control.gpu_readings(con)}
     gpu_rows = []
     for i in cfg.gpus:
         g = live.get(i) or next((d for d in cfg.detected if d.index == i), None)
@@ -344,6 +385,12 @@ def status_data(con, cfg) -> dict:
                 "name": g.name if g else None,
                 "mem_total_mb": g.mem_total if g else None,
                 "mem_used_mb": g.mem_used if g else None,
+                "util_pct": g.util if g else None,
+                "temp_c": g.temp if g else None,
+                "power_w": g.power if g else None,
+                "power_limit_w": g.power_limit if g else None,
+                "fan_pct": g.fan if g else None,
+                "clock_mhz": g.clock if g else None,
                 "shared": i == cfg.shared_gpu,
                 "jobs": [j["id"] for j in running if i in (j["gpus"] or [])],
             }
@@ -353,6 +400,8 @@ def status_data(con, cfg) -> dict:
     for n, j in enumerate(queue, 1):
         d = job_public(con, j)
         d["position"] = n
+        d["turn"] = j.get("turn", n)  # place in queue order (est_start order can differ)
+        d["waiting_for"] = j.get("waiting_for", [])
         d["est_start"] = iso(est.get(j["id"]))
         q.append(d)
     return {
@@ -370,6 +419,8 @@ def status_data(con, cfg) -> dict:
         "running": [job_public(con, j) for j in running],
         "queue": q,
         "recent": [job_public(con, j) for j in db.recent(con, 5)],
+        "cpu": control.cpu_reading(con),
+        "timeline": timeline(con, running, queue, placed),
         "_est": est,
     }
 
@@ -426,9 +477,12 @@ def cmd_status(a) -> int:
         for j in s["queue"]:
             waited = time.time() - raw[j["id"]]["submitted_at"] if j["id"] in raw else None
             flag = " (resume)" if j["resume"] else ""
+            start = fmt_start(est.get(j["id"]), mode)
+            if j["waiting_for"] and est.get(j["id"]) is None:
+                start = "after job " + ",".join(map(str, j["waiting_for"]))
             print(
                 f"  {j['position']:>3}  {j['id']:<4} {j['preset']:<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
-                f"{fmt_start(est.get(j['id']), mode):<20} {trunc(j['command'], 40)}{flag}"
+                f"{trunc(start, 20):<20} {trunc(j['command'], 40)}{flag}"
             )
     else:
         print("Queue empty")
@@ -459,12 +513,11 @@ def cmd_show(a) -> int:
 
 def cmd_priority(a) -> int:
     con = db.connect()
-    with db.tx(con):
-        j = get_job_or_fail(con, a.id)
-        if j["state"] != "queued":
-            raise CLIError(f"job {a.id} is {j['state']}, not queued")
-        db.update(con, a.id, position=db.front_position(con), prio=1)
-    print(f"job {a.id} moved to the front of the queue")
+    get_job_or_fail(con, a.id)
+    msg = control.to_front(con, a.id)
+    if "moved" not in msg:
+        raise CLIError(msg)
+    print(msg)
     return 0
 
 
@@ -475,6 +528,13 @@ def cmd_swap(a) -> int:
         for j in (x, y):
             if j["state"] != "queued":
                 raise CLIError(f"job {j['id']} is {j['state']}, not queued")
+        queue = db.queued(con)
+        order = [q["id"] for q in queue]
+        i, k = order.index(x["id"]), order.index(y["id"])
+        order[i], order[k] = order[k], order[i]
+        problem = control.order_problem(queue, order)
+        if problem:
+            raise CLIError(problem)
         db.update(con, x["id"], position=y["position"], prio=y["prio"])
         db.update(con, y["id"], position=x["position"], prio=x["prio"])
     print(f"swapped jobs {a.a} and {a.b}")
@@ -915,6 +975,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument(
         "--priority", action="store_true", help="put the job at the front of the queue (only when the user asks)"
+    )
+    s.add_argument(
+        "--after",
+        action="append",
+        metavar="JOB",
+        help="start only after these jobs finished successfully, e.g. --after 12 or --after 12,13 "
+        "(if one fails or is cancelled, this job is cancelled)",
     )
     s.add_argument("--no-start", action="store_true", help="do not auto-start the daemon")
     s.add_argument("--json", action="store_true")

@@ -20,6 +20,12 @@ class GPU:
     name: str
     mem_total: int  # MiB
     mem_used: int  # MiB
+    util: int | None = None  # % of time the GPU was busy
+    temp: int | None = None  # degrees C
+    power: float | None = None  # W drawn
+    power_limit: float | None = None  # W
+    fan: int | None = None  # %
+    clock: int | None = None  # SM clock, MHz
 
     @property
     def free_perc(self) -> float:
@@ -71,7 +77,7 @@ def query() -> list[GPU]:
         return []
     try:
         out = subprocess.run(
-            [exe, "--query-gpu=index,name,memory.total,memory.used", "--format=csv,noheader,nounits"],
+            [exe, f"--query-gpu={QUERY}", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -81,16 +87,32 @@ def query() -> list[GPU]:
         raise GPUQueryError(f"nvidia-smi failed: {e}") from e
     if out.returncode != 0:
         raise GPUQueryError(f"nvidia-smi failed: {(out.stderr or out.stdout).strip()}")
-    gpus = []
-    for line in out.stdout.strip().splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
-            continue
-        try:
-            gpus.append(GPU(int(parts[0]), parts[1], int(float(parts[2])), int(float(parts[3]))))
-        except ValueError:
-            continue
-    return gpus
+    return [g for g in map(parse_line, out.stdout.strip().splitlines()) if g is not None]
+
+
+QUERY = "index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm"
+
+
+def _num(s: str, kind=int):
+    """A number from nvidia-smi, or None for "[N/A]", "[Not Supported]" etc."""
+    try:
+        return kind(float(s))
+    except ValueError:
+        return None
+
+
+def parse_line(line: str) -> GPU | None:
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 4:
+        return None
+    try:
+        g = GPU(int(parts[0]), parts[1], int(float(parts[2])), int(float(parts[3])))
+    except ValueError:
+        return None
+    extra = parts[4:10] + [""] * (6 - len(parts[4:10]))
+    g.util, g.temp, g.fan, g.clock = _num(extra[0]), _num(extra[1]), _num(extra[4]), _num(extra[5])
+    g.power, g.power_limit = _num(extra[2], float), _num(extra[3], float)
+    return g
 
 
 def detect() -> list[GPU]:

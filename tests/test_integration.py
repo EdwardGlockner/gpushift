@@ -149,8 +149,49 @@ def test_job_dies_while_frozen(q):
     assert "nothing to resume" not in q.gpushift("resume").stdout  # mode was free -> resumes the queue
 
 
+def test_after_waits_for_a_job_and_is_cancelled_when_it_fails(q):
+    import json
+
+    train = q.submit("--one", "--", PY, "-c", "import time; time.sleep(3); print('trained')")
+    ev = q.submit("--light", "--after", str(train), "--", PY, "-c", "print('evaluated')")
+    doomed = q.submit("--cpu", "--", PY, "-c", "raise SystemExit(1)")
+    never = q.submit("--cpu", "--after", f"{train},{doomed}", "--", PY, "-c", "print('never')")
+    q.wait_state(train, "running")
+    s = json.loads(q.gpushift("status", "--json").stdout)
+    assert next(j for j in s["queue"] if j["id"] == ev)["waiting_for"] == [train]
+    assert q.state(ev) == "queued"  # the light GPU is free, but it waits
+    q.wait_state(doomed, "failed")
+    q.wait_state(never, "cancelled")
+    assert f"job {doomed}" in q.job(never)["note"]
+    q.wait_state(train, "done")
+    q.wait_state(ev, "done")
+    assert q.job(ev)["started_at"] >= q.job(train)["ended_at"]
+    # Waiting for a job that already failed is refused at submit time.
+    r = q.gpushift("submit", "--cpu", "--after", str(doomed), "--", PY, "-c", "pass", check=False)
+    assert r.returncode != 0 and "would never run" in r.stderr
+    r = q.gpushift("submit", "--cpu", "--after", "9999", "--", PY, "-c", "pass", check=False)
+    assert r.returncode != 0 and "no job 9999" in r.stderr
+
+
+def test_time_frozen_is_not_run_time(q):
+    import json
+
+    jid = q.submit("--one", *ticker())
+    q.wait_for(lambda: q.job(jid)["pid"], what="pid")
+    q.gpushift("free", "--soft")
+    time.sleep(3)
+    q.gpushift("resume")
+    assert q.job(jid)["paused_s"] >= 2.5
+    s = json.loads(q.gpushift("status", "--json").stdout)
+    j = next(r for r in s["running"] if r["id"] == jid)
+    assert j["runtime_s"] < time.time() - q.job(jid)["started_at"] - 2.5
+    q.gpushift("cancel", str(jid))
+    q.wait_state(jid, "cancelled")
+    assert q.job(jid)["total_runtime"] < time.time() - q.job(jid)["started_at"] - 2.5
+
+
 def test_eviction_timeout_falls_back_to_freeze(q):
-    (q.home / "config.toml").write_text("evict_timeout = 1\n")
+    q.write_config("evict_timeout = 1\n")
     # claims to be resumable but never checks for the stop request
     jid = q.submit("--one", "--resumable", *ticker())
     q.wait_for(lambda: q.job(jid)["pid"], what="pid")
@@ -178,6 +219,22 @@ def test_reboot_while_free(q, tmp_path):
     assert q.state(res) == "queued"
     q.gpushift("resume")
     q.wait_state(res, "done", timeout=30)
+
+
+def test_stop_leaves_running_jobs_alone(q):
+    import psutil
+
+    jid = q.submit("--one", *ticker())
+    q.wait_for(lambda: q.job(jid)["pid"], what="pid")
+    pid = q.job(jid)["pid"]
+    q.gpushift("stop")
+    time.sleep(1.0)
+    assert psutil.pid_exists(pid)
+    q.start()
+    time.sleep(2.0)  # the new daemon adopts it instead of marking it lost
+    assert q.state(jid) == "running"
+    q.gpushift("cancel", str(jid))
+    q.wait_state(jid, "cancelled")
 
 
 def test_starvation_guard_two_gpu_job_not_starved(q):
@@ -396,7 +453,7 @@ def _mode(q):
 
 
 def test_gpus_are_freed_while_the_user_runs_a_heavy_gpu_program(q):
-    (q.home / "config.toml").write_text(AUTO_FREE_CONFIG)
+    q.write_config(AUTO_FREE_CONFIG)
     jid = q.submit("--one", *ticker())
     q.wait_for(lambda: q.job(jid)["pid"], what="pid")
     prog = _user_program(q)
@@ -413,7 +470,7 @@ def test_gpus_are_freed_while_the_user_runs_a_heavy_gpu_program(q):
 
 
 def test_manual_resume_during_auto_free_is_respected(q):
-    (q.home / "config.toml").write_text(AUTO_FREE_CONFIG)
+    q.write_config(AUTO_FREE_CONFIG)
     prog = _user_program(q)
     try:
         q.wait_for(lambda: _mode(q) == "free", 15, "automatic free")
@@ -426,7 +483,7 @@ def test_manual_resume_during_auto_free_is_respected(q):
 
 
 def test_manual_free_is_not_resumed_automatically(q):
-    (q.home / "config.toml").write_text(AUTO_FREE_CONFIG)
+    q.write_config(AUTO_FREE_CONFIG)
     q.gpushift("free")
     time.sleep(2.5)
     assert _mode(q) == "free"
@@ -440,7 +497,7 @@ def test_dashboard(q, tmp_path):
     with socket.socket() as s:  # a free port
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    (q.home / "config.toml").write_text(f"ui_port = {port}\n")
+    q.write_config(f"ui_port = {port}\n")
     q.kill_daemon()
     q.start()
     base = f"http://127.0.0.1:{port}"
@@ -476,3 +533,18 @@ def _reachable(base):
         return True
     except OSError:
         return False
+
+
+def test_short_whole_machine_job_runs_before_a_long_one_gpu_job(q):
+    q.gpushift("free")  # queue both before the daemon decides
+    long = q.submit("--one", "--eta", "4h", *ticker())
+    short = q.submit("--exclusive", "--eta", "1m", *ticker(20))
+    q.gpushift("resume")
+    q.wait_state(short, "running")
+    assert q.state(long) == "queued"
+    q.wait_state(short, "done")
+    q.wait_state(long, "running")
+    q.gpushift("cancel", str(long))
+    from gpushift import paths
+
+    assert f"job {short} runs ahead of job {long}" in paths.daemon_log().read_text()

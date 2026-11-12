@@ -7,9 +7,11 @@ First release.
 - `gpushift` CLI and scheduler daemon: presets (`--light`, `--one`, `--two`,
   `--exclusive`, `--cpu`), slots, start-time estimates learned from earlier runs,
   and `status --json` with a stable schema.
-- Scheduling: sessions take turns (fair share by recent GPU time); a waiting
+- Scheduling: first come, first served (or sessions take turns, `fair_share = true`); a waiting
   multi-GPU job can't starve, while jobs that finish in time may use idle GPUs;
-  jobs with a known memory need (`--vram`, or learned from earlier runs) share GPUs.
+  jobs with a known memory need (`--vram`, or learned from earlier runs) share GPUs;
+  short jobs may run before long ones when that cuts the total waiting, without
+  pushing any job back more than an hour or half its run time.
 - Free mode: `gpushift free` checkpoints resumable jobs, restarts `--restartable`
   ones and freezes the rest, and says which GPU frozen jobs still hold;
   `gpushift resume` continues everything. Survives reboots and daemon restarts.
@@ -17,7 +19,11 @@ First release.
   detected from per-process GPU memory, with automatic resume afterwards.
 - Notifications: the submitting Claude session is told when its jobs end, and
   desktop notifications report failures.
-- `gpushift ui`: a local web dashboard with GPUs, jobs, the queue and controls.
+- `--after <job>`: a job starts only once the jobs it depends on finished
+  successfully (train, then eval); it is cancelled if one of them fails.
+- `gpushift ui`: a local web dashboard with the GPUs, CPU and drives, a timeline
+  of what runs where and when, running jobs with their logs, the queue (drag to
+  reorder) and controls. Time a job spends frozen doesn't count as run time.
 - Jobs run with the submitter's cwd and environment. A command given as one
   string runs in a shell: on Windows, the Git Bash it was submitted from (what
   Claude Code's Bash tool uses) unless it uses backslash paths, otherwise

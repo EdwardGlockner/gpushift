@@ -3,12 +3,13 @@ job runners, so most of gpushift keeps working even when the daemon is down."""
 
 from __future__ import annotations
 
+import math
 import os
 import statistics
 import time
 
 from . import _proc, db, paths
-from .scheduler import Machine, Req, simulate
+from .scheduler import Machine, Req, reorder, simulate
 
 # ---------------------------------------------------------------- helpers
 
@@ -59,13 +60,44 @@ def clear_stop(job_id: int) -> None:
         pass
 
 
+def ran(j: dict, now: float | None = None) -> float:
+    """Seconds the job has actually run, over all attempts. Time spent frozen
+    doesn't count."""
+    total = j["total_runtime"]
+    if j["state"] in db.ACTIVE and j["started_at"]:
+        now = time.time() if now is None else now
+        frozen = now - j["frozen_at"] if j.get("frozen_at") else 0.0
+        total += max(0.0, now - j["started_at"] - (j.get("paused_s") or 0.0) - frozen)
+    return total
+
+
+def unfreeze(j: dict, now: float) -> dict:
+    """Fields that end a frozen spell: the time it lasted moves to paused_s."""
+    if not j.get("frozen_at"):
+        return {"frozen_at": None}
+    return {"frozen_at": None, "paused_s": (j.get("paused_s") or 0.0) + now - j["frozen_at"]}
+
+
+def to_front(con, job_id: int) -> str:
+    """Move a queued job to the front of the queue (--priority / `gpushift priority`)."""
+    with db.tx(con):
+        queue = db.queued(con)
+        if job_id not in [q["id"] for q in queue]:
+            cur = db.get_job(con, job_id)
+            return f"job {job_id} is {cur['state'] if cur else 'not found'}, not queued"
+        problem = order_problem(queue, [job_id] + [q["id"] for q in queue if q["id"] != job_id])
+        if problem:
+            return problem
+        db.update(con, job_id, position=db.front_position(con), prio=1)
+    return f"job {job_id} moved to the front of the queue"
+
+
 def requeue_front(con, job_id: int, *, note: str, resume: bool = True, from_states=db.ACTIVE) -> bool:
     """Put an active job back at the head of the queue (eviction / lost runner)."""
     j = db.get_job(con, job_id)
     if j is None:
         return False
-    now = time.time()
-    runtime = j["total_runtime"] + (now - j["started_at"] if j["started_at"] else 0.0)
+    runtime = ran(j)
     return db.update(
         con,
         job_id,
@@ -82,6 +114,7 @@ def requeue_front(con, job_id: int, *, note: str, resume: bool = True, from_stat
         pid_ctime=None,
         started_at=None,
         frozen_at=None,
+        paused_s=0.0,
         evict_requested_at=None,
         note=note,
     )
@@ -113,7 +146,16 @@ def cancel(con, job_id: int) -> str:
     if not _proc.alive(j["runner_pid"], j["runner_ctime"]):
         # Nobody left to record the result; do it ourselves.
         with db.tx(con):
-            db.update(con, job_id, where_state=db.ACTIVE, state="cancelled", ended_at=time.time(), note="cancelled")
+            cur = db.get_job(con, job_id)
+            db.update(
+                con,
+                job_id,
+                where_state=db.ACTIVE,
+                state="cancelled",
+                ended_at=time.time(),
+                total_runtime=ran(cur),
+                note="cancelled",
+            )
     return f"job {job_id} cancelled" + (" (process killed)" if killed else "")
 
 
@@ -163,7 +205,7 @@ def free(con, soft: bool, auto: dict | None = None) -> dict:
                     where_state=("running", "frozen"),
                     state="evicting",
                     evict_requested_at=now,
-                    frozen_at=None,
+                    **unfreeze(j, now),
                 )
             if ok:
                 _proc.kill_tree(j["pid"], j["pid_ctime"])
@@ -187,7 +229,7 @@ def free(con, soft: bool, auto: dict | None = None) -> dict:
             if evict:  # soft -> full upgrade: wake it up so it can checkpoint
                 with db.tx(con):
                     ok = db.update(
-                        con, jid, where_state="frozen", state="evicting", evict_requested_at=now, frozen_at=None
+                        con, jid, where_state="frozen", state="evicting", evict_requested_at=now, **unfreeze(j, now)
                     )
                 if ok:
                     request_stop(j)
@@ -211,12 +253,13 @@ def resume(con, auto: bool = False) -> dict:
         db.set_kv(con, "auto_free", None)
         jobs = db.active(con)
     rep = {"previous_mode": prev, "resumed": [], "evicting": []}
+    now = time.time()
     for j in jobs:
         if j["state"] == "frozen":
             clear_stop(j["id"])
             with db.tx(con):
                 ok = db.update(
-                    con, j["id"], where_state="frozen", state="running", frozen_at=None, evict_requested_at=None
+                    con, j["id"], where_state="frozen", state="running", evict_requested_at=None, **unfreeze(j, now)
                 )
             if ok:
                 _proc.resume_tree(j["pid"], j["pid_ctime"])
@@ -278,7 +321,7 @@ def reconcile(con, grace: float = 60.0) -> list[int]:
             if cur is None or cur["state"] not in db.ACTIVE or cur["runner_pid"] != j["runner_pid"]:
                 continue  # runner finished it, or it was restarted, meanwhile
             if cur["cancel_requested"]:
-                db.update(con, j["id"], state="cancelled", ended_at=now, note="cancelled")
+                db.update(con, j["id"], state="cancelled", ended_at=now, total_runtime=ran(cur, now), note="cancelled")
             elif is_resumable(cur):
                 requeue_front(con, j["id"], note="runner lost (crash/reboot); will resume from checkpoint")
             elif cur["restartable"]:
@@ -289,6 +332,7 @@ def reconcile(con, grace: float = 60.0) -> list[int]:
                     j["id"],
                     state="failed",
                     ended_at=now,
+                    total_runtime=ran(cur, now),
                     note="runner lost (crash/reboot) and job is not resumable; `gpushift retry` to rerun",
                 )
         lost.append(j["id"])
@@ -312,11 +356,7 @@ def time_left(con, j: dict, now: float | None = None) -> float | None:
     dur = expected_duration(con, j)
     if dur is None:
         return None
-    now = time.time() if now is None else now
-    ran = j["total_runtime"]
-    if j["state"] in db.ACTIVE and j["started_at"]:
-        ran += now - j["started_at"]
-    left = dur - ran
+    left = dur - ran(j, now)
     return left if left > 0 else None
 
 
@@ -328,17 +368,16 @@ def session_usage(con, now: float) -> dict[str | None, float]:
     """GPU-seconds each session used recently (running jobs included)."""
     usage: dict[str | None, float] = {}
     rows = con.execute(
-        "SELECT session, n_gpus, total_runtime, started_at, state FROM jobs "
+        "SELECT session, n_gpus, total_runtime, started_at, frozen_at, paused_s, state FROM jobs "
         "WHERE state IN ('running','frozen','evicting') OR ended_at > ?",
         (now - FAIR_WINDOW,),
     )
     for r in rows:
-        ran = r["total_runtime"] + (now - r["started_at"] if r["state"] in db.ACTIVE and r["started_at"] else 0.0)
-        usage[r["session"]] = usage.get(r["session"], 0.0) + ran * max(1, r["n_gpus"])
+        usage[r["session"]] = usage.get(r["session"], 0.0) + ran(dict(r), now) * max(1, r["n_gpus"])
     return usage
 
 
-def ordered_queue(con, fair: bool = True, now: float | None = None) -> list[dict]:
+def ordered_queue(con, fair: bool = False, now: float | None = None) -> list[dict]:
     """Queued jobs in the order they get their turn.
 
     Jobs moved up with --priority and evicted jobs waiting to resume come
@@ -346,9 +385,11 @@ def ordered_queue(con, fair: bool = True, now: float | None = None) -> list[dict
     terminal counts as one): the next job comes from the session that has used
     the least GPU time, counting what its earlier picks will use."""
     queued = db.queued(con)
+    if not fair:
+        return queued  # queue position (--priority and evicted jobs get the front position)
     first = [j for j in queued if j["prio"] or j["resume"]]
     rest = [j for j in queued if not (j["prio"] or j["resume"])]
-    if not fair or len({j["session"] for j in rest}) < 2:
+    if len({j["session"] for j in rest}) < 2:
         return first + rest
     now = time.time() if now is None else now
     usage = session_usage(con, now)
@@ -367,9 +408,49 @@ def ordered_queue(con, fair: bool = True, now: float | None = None) -> list[dict
     return first + order
 
 
-def plan_inputs(con, now: float | None = None, fair: bool = True):
-    """Running jobs, queued jobs (in turn order) and the time estimates the
-    scheduler uses."""
+def waiting_for(con, queued: list[dict]) -> dict[int, set[int]]:
+    """Queued job id -> the jobs it still waits for (--after): those that are
+    queued or running. Jobs that wait for nothing are left out."""
+    deps = {j["id"]: set(j.get("after_ids") or []) for j in queued if j.get("after_ids")}
+    ids = set().union(*deps.values()) if deps else set()
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    open_ = {
+        r["id"]
+        for r in con.execute(
+            f"SELECT id FROM jobs WHERE id IN ({marks}) AND state NOT IN ('done','failed','cancelled')", list(ids)
+        )
+    }
+    return {i: d & open_ for i, d in deps.items() if d & open_}
+
+
+def cancel_orphans(con) -> list[tuple[int, int, str]]:
+    """Cancel queued jobs that wait for a job which failed or was cancelled:
+    they would wait forever. Returns (job, the job it waited for, its state)."""
+    out = []
+    with db.tx(con):
+        for j in db.queued(con):
+            for dep in j.get("after_ids") or []:
+                d = con.execute("SELECT state FROM jobs WHERE id=?", (dep,)).fetchone()
+                if d is None or d["state"] in ("failed", "cancelled"):
+                    state = d["state"] if d else "gone"
+                    db.update(
+                        con,
+                        j["id"],
+                        where_state="queued",
+                        state="cancelled",
+                        ended_at=time.time(),
+                        note=f"not run: job {dep}, which it waited for, {state if state != 'gone' else 'no longer exists'}",
+                    )
+                    out.append((j["id"], dep, state))
+                    break
+    return out
+
+
+def plan_inputs(con, now: float | None = None, fair: bool = False):
+    """Running jobs, queued jobs (in queue order), the time estimates the
+    scheduler uses, and what queued jobs still wait for (--after)."""
     now = time.time() if now is None else now
     active, queued = db.active(con), ordered_queue(con, fair, now)
     for j in active + queued:
@@ -377,22 +458,135 @@ def plan_inputs(con, now: float | None = None, fair: bool = True):
     running = [(req_of(j), j["gpus"] or []) for j in active]
     remaining = {j["id"]: time_left(con, j, now) for j in active}
     durations = {j["id"]: time_left(con, j, now) for j in queued}
-    return running, queued, remaining, durations
+    return running, queued, remaining, durations, waiting_for(con, queued)
 
 
-def estimate_starts(con, machine: Machine, guard: bool, fair: bool = True) -> dict[int, float | None]:
-    """job id -> estimated start (unix time) for queued jobs; None = unknown."""
-    now = time.time()
-    if db.get_mode(con) != "normal":
-        return {j["id"]: None for j in db.queued(con)}
-    running, queued, remaining, durations = plan_inputs(con, now, fair)
-    off = simulate(
+def decide(con, machine: Machine, guard: bool, fair: bool = False, slack: float = 0.0, now: float | None = None):
+    """The order the queue runs in: queue order, possibly with one job moved to
+    the front when that saves waiting overall (see scheduler.reorder).
+
+    Returns (running, queued in that order, remaining, durations, Reorder,
+    waiting) where waiting maps jobs that may not start yet to what they wait for."""
+    now = time.time() if now is None else now
+    running, queued, remaining, durations, waiting = plan_inputs(con, now, fair)
+    args, kw = _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting)
+    res = reorder(*args, **kw)
+    by_id = {j["id"]: j for j in queued}
+    return running, [by_id[i] for i in res.order], remaining, durations, res, waiting
+
+
+def _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting):
+    promised = db.get_kv(con, "reorder_limits") or {}
+    return (
         [(req_of(j), durations[j["id"]]) for j in queued],
         [(r, g, remaining[r.id]) for r, g in running],
         machine,
         guard,
+    ), dict(
+        slack=slack,
+        pinned={j["id"] for j in queued if j["prio"] or j["resume"]},
+        limits={int(k): v - now for k, v in promised.items()},
+        after=waiting,
     )
-    return {k: (now + v if v is not None else None) for k, v in off.items()}
+
+
+def queue_and_starts(con, cfg, plan_out: dict | None = None) -> tuple[list[dict], dict[int, float | None]]:
+    """Queued jobs in the order they are expected to start, and job id ->
+    estimated start (unix time; None = unknown). Each queued job gets
+    ``waiting_for`` (ids, --after). plan_out, if given, is filled with job id ->
+    (start, gpus, end or None) in unix time for every job the forecast places."""
+    if db.get_mode(con) != "normal":
+        queued = ordered_queue(con, cfg.fair_share)
+        waiting = waiting_for(con, queued)
+        for j in queued:
+            j["waiting_for"] = sorted(waiting.get(j["id"], ()))
+        return queued, {j["id"]: None for j in queued}
+    now = time.time()
+    running, queued, remaining, durations, waiting = plan_inputs(con, now, cfg.fair_share)
+    machine = live_machine(cfg, con)
+    args, kw = _reorder_args(
+        con, queued, running, remaining, durations, machine, cfg.starvation_guard, cfg.reorder_slack, now, waiting
+    )
+    out: dict = {}
+    off = simulate(*args, **kw, out=out)
+    if plan_out is not None:
+        for i, (start, gpus, end) in out.items():
+            plan_out[i] = (now + start, gpus, None if end is None else now + end)
+    est = {k: (now + v if v is not None else None) for k, v in off.items()}
+    for j in queued:
+        j["waiting_for"] = sorted(waiting.get(j["id"], ()))
+    turn = {j["id"]: n for n, j in enumerate(queued)}
+    for j in queued:
+        j["turn"] = turn[j["id"]] + 1
+    queued.sort(key=lambda j: (est[j["id"]] is None, est[j["id"]] or 0.0, turn[j["id"]]))
+    return queued, est
+
+
+def order_problem(queue: list[dict], order: list[int]) -> str | None:
+    """Why this queue order is not allowed, or None: a job may not be put
+    ahead of a queued job it waits for (--after)."""
+    pos = {i: n for n, i in enumerate(order)}
+    for j in queue:
+        for dep in j.get("after_ids") or []:
+            if dep in pos and j["id"] in pos and pos[dep] > pos[j["id"]]:
+                return f"job {j['id']} waits for job {dep} (--after), so it can't go ahead of it"
+    return None
+
+
+def move(con, job_id: int, before: int | None) -> str:
+    """Move a queued job to just before another queued job (None: to the end).
+    A job moved up is pinned like --priority (later reordering never pushes it
+    back); a job moved down loses that."""
+    with db.tx(con):
+        queue = db.queued(con)
+        ids = [j["id"] for j in queue]
+        if job_id not in ids:
+            j = db.get_job(con, job_id)
+            return f"job {job_id} is {j['state'] if j else 'not found'}, not queued"
+        if before is not None and before not in ids:
+            return f"job {before} is not queued"
+        if before == job_id:
+            return f"job {job_id} stays where it is"
+        old = ids.index(job_id)
+        rest = [j for j in queue if j["id"] != job_id]
+        at = len(rest) if before is None else next(i for i, j in enumerate(rest) if j["id"] == before)
+        order = [j["id"] for j in rest]
+        order.insert(at, job_id)
+        problem = order_problem(queue, order)
+        if problem:
+            return problem
+        lo = rest[at - 1]["position"] if at > 0 else None
+        hi = rest[at]["position"] if at < len(rest) else None
+        if lo is not None and hi is not None and hi - lo < 1e-6:
+            # Positions have been halved too often: renumber the queue first.
+            for n, j in enumerate(rest):
+                j["position"] = float(n)
+                db.update(con, j["id"], position=j["position"])
+            lo, hi = (float(at - 1) if at > 0 else None), (float(at) if at < len(rest) else None)
+        if lo is None and hi is None:
+            pos = 0.0
+        elif lo is None:
+            pos = hi - 1.0
+        elif hi is None:
+            pos = lo + 1.0
+        else:
+            pos = (lo + hi) / 2
+        up = at < old
+        db.update(con, job_id, position=pos, prio=1 if up else 0)
+    where = "the end" if before is None else f"before job {before}"
+    return f"job {job_id} moved to {where}"
+
+
+def promise(con, res, now: float) -> None:
+    """Remember the latest start each job was promised when a job jumped ahead,
+    so later reorders cannot push it back further. Forget jobs no longer queued."""
+    old = {int(k): v for k, v in (db.get_kv(con, "reorder_limits") or {}).items()}
+    queued = set(res.order)
+    new = {k: v for k, v in old.items() if k in queued}
+    for i, off in (res.limits or {}).items():
+        new[i] = min(new.get(i, math.inf), now + off)
+    if new != old:
+        db.set_kv(con, "reorder_limits", {str(k): v for k, v in new.items()} or None)
 
 
 def machine_from_config(cfg, mem_ok: set[int] | None = None, capacity: dict[int, int] | None = None) -> Machine:
@@ -420,20 +614,40 @@ def mem_ok(cfg, live) -> set[int] | None:
     return {i for i in cfg.gpus if i not in known or known[i].free_perc >= cfg.gpu_free_perc}
 
 
-def live_machine(cfg) -> Machine:
+GPU_READING_MAX_AGE = 10.0  # seconds a reading stored by the daemon counts as current
+
+
+def gpu_readings(con=None) -> list:
+    """Current GPU readings. Taken from the daemon's last poll when it is
+    recent, so status and the dashboard don't run nvidia-smi (~0.1 s, and
+    work for the driver) on every refresh."""
     from . import gpus
 
+    con = con or db.connect()
+    at = db.get_kv(con, "gpu_state_at")
+    stored = db.get_kv(con, "gpu_state")
+    if at and stored is not None and time.time() - at < GPU_READING_MAX_AGE:
+        return [gpus.GPU(**g) for g in stored]
     try:
-        live = gpus.query()
+        return gpus.query()
     except gpus.GPUQueryError:
-        live = []
-    return machine_from_config(cfg, mem_ok(cfg, live), _daemon_capacity())
+        return []
 
 
-def _daemon_capacity() -> dict[int, int] | None:
+def cpu_reading(con) -> dict | None:
+    """The daemon's last CPU/RAM reading (see cpustat), if it is recent."""
+    r = db.get_kv(con, "cpu_state")
+    return r if r and time.time() - r.get("at", 0) < GPU_READING_MAX_AGE else None
+
+
+def live_machine(cfg, con=None) -> Machine:
+    con = con or db.connect()
+    return machine_from_config(cfg, mem_ok(cfg, gpu_readings(con)), _daemon_capacity(con))
+
+
+def _daemon_capacity(con) -> dict[int, int] | None:
     """The packing capacity the daemon measured last (so `status` estimates
     match what the daemon will do)."""
-    con = db.connect()
     cap = db.get_kv(con, "pack_capacity")
     return {int(k): v for k, v in cap.items()} if cap else None
 

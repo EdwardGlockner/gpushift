@@ -16,7 +16,7 @@ from pathlib import Path
 
 import psutil
 
-from . import _proc, config, control, db, gpumem, gpus, notify, paths, scheduler
+from . import _proc, config, control, cpustat, db, gpumem, gpus, notify, paths, scheduler
 
 log = logging.getLogger("gpushift.daemon")
 
@@ -108,7 +108,9 @@ def stop() -> bool:
     ctime = db.get_kv(con, "daemon_ctime")
     if not is_running():
         return False
-    ok = _proc.kill_tree(pid, ctime) if pid else False
+    # Only the daemon: runners are its children, and running jobs must survive
+    # a stop. The next daemon adopts them.
+    ok = _proc.kill(pid, ctime) if pid else False
     for _ in range(50):
         if not is_running():
             return True
@@ -140,14 +142,16 @@ def _setup_logging() -> None:
 class Daemon:
     def __init__(self):
         self.con = db.connect()
-        self.cfg = config.load()
+        # mtime before load: an edit in between is then picked up by the next reload.
         self.cfg_mtime = self._cfg_mtime()
+        self.cfg = config.load()
         self.gpu_state: list[gpus.GPU] = list(self.cfg.detected)
         self.last_gpu_poll = 0.0
         self.procs: dict[int, int] | None = None  # pid -> GPU MiB, from the last poll
         self.capacity: dict[int, int] | None = None  # MiB per GPU packed jobs may book
         self.user_since: float | None = None  # when heavy user GPU programs were first seen
         self.user_gone_since: float | None = None  # when the last one closed
+        self.cpu = cpustat.Sampler()
 
     def _cfg_mtime(self) -> float:
         try:
@@ -172,13 +176,28 @@ class Daemon:
             return
         self.last_gpu_poll = now
         try:
-            self.gpu_state = [g for g in gpus.query() if g.index in self.cfg.gpus]
-            db.set_kv(self.con, "gpu_state", [g.to_dict() for g in self.gpu_state])
+            every = gpus.query()
+            self.gpu_state = [g for g in every if g.index in self.cfg.gpus]
+            # All GPUs, not just the usable ones: config.load() detects from this.
+            db.set_kv(self.con, "gpu_state", [g.to_dict() for g in every])
+            db.set_kv(self.con, "gpu_state_at", now)
         except gpus.GPUQueryError as e:
             log.warning("%s", e)
         self.procs = gpumem.per_process()
         self.measure_jobs()
         self.watch_user()
+        self.poll_cpu()
+
+    def poll_cpu(self) -> None:
+        job_of = {}
+        for j in db.active(self.con):
+            p = _proc.get_proc(j["pid"], j["pid_ctime"])
+            if p is not None:
+                job_of.update({q.pid: j["id"] for q in _proc.tree(p)})
+        try:
+            db.set_kv(self.con, "cpu_state", self.cpu.sample(job_of))
+        except Exception:  # a dashboard reading must never stop the scheduler
+            log.exception("cpu reading failed")
 
     # -- the user's own GPU programs (games, Blender, ...)
 
@@ -280,15 +299,27 @@ class Daemon:
         with db.tx(self.con):
             if db.get_mode(self.con) != "normal":
                 return
-            running, queued, remaining, durations = control.plan_inputs(self.con, now, self.cfg.fair_share)
+            guard, fair = self.cfg.starvation_guard, self.cfg.fair_share
+            running, queued, remaining, durations, res, waiting = control.decide(
+                self.con, machine, guard, fair, self.cfg.reorder_slack, now
+            )
             starts = scheduler.plan(
-                [control.req_of(j) for j in queued],
+                [control.req_of(j) for j in queued if j["id"] not in waiting],
                 running,
                 machine,
-                self.cfg.starvation_guard,
+                guard,
                 durations=durations,
                 remaining=remaining,
             )
+            jumped = [jid for jid, _ in starts if jid in res.moved]
+            if jumped:
+                log.info(
+                    "job %s runs ahead of job %s: saves %.0f min of waiting in total",
+                    ", ".join(map(str, jumped)),
+                    ", ".join(map(str, res.passed)),
+                    res.gain / 60,
+                )
+            control.promise(self.con, res if jumped else scheduler.Reorder(res.order, res.est), now)
             for jid, g in starts:
                 db.update(
                     self.con,
@@ -303,6 +334,7 @@ class Daemon:
                     pid_ctime=None,
                     exit_code=None,
                     frozen_at=None,
+                    paused_s=0.0,
                     evict_requested_at=None,
                 )
         for jid, g in starts:
@@ -321,6 +353,8 @@ class Daemon:
             log.warning("job %s: runner lost", jid)
         for jid in control.enforce_evict_timeout(self.con, self.cfg.evict_timeout):
             log.warning("job %s did not checkpoint in time; frozen", jid)
+        for jid, dep, state in control.cancel_orphans(self.con):
+            log.info("job %s cancelled: job %s, which it waited for, %s", jid, dep, state)
         self.poll_gpus()
         self.schedule()
         self.notify_ended()

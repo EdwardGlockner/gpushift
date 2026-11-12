@@ -137,6 +137,30 @@ def test_time_left_unknown_once_overdue():
     assert control.time_left(None, resumed, now=0.0) == 200.0
 
 
+def test_time_spent_frozen_does_not_count_as_run_time():
+    from gpushift import control
+
+    j = {"total_runtime": 50.0, "state": "frozen", "started_at": 1000.0, "frozen_at": 1100.0, "paused_s": 0.0}
+    assert control.ran(j, now=1700.0) == 150.0  # 100 s run before the freeze, plus 50 s from an earlier attempt
+    j |= control.unfreeze(j, 1700.0)
+    j["state"] = "running"
+    assert j["paused_s"] == 600.0 and j["frozen_at"] is None
+    assert control.ran(j, now=1800.0) == 250.0
+    assert control.time_left(None, {**j, "eta_seconds": 1000}, now=1800.0) == 750.0
+
+
+def test_dashboard_log_shows_the_end_and_the_last_state_of_progress_bars(tmp_path, monkeypatch):
+    from gpushift import paths, ui
+
+    monkeypatch.setattr(paths, "log_file", lambda jid: tmp_path / f"{jid}.log")
+    (tmp_path / "7.log").write_bytes(b"start\r\nstep 1/3\rstep 2/3\rstep 3/3\r\ndone\n")
+    assert ui.log_tail(7)["text"] == "start\nstep 3/3\ndone\n"
+    monkeypatch.setattr(ui, "LOG_TAIL", 10)
+    r = ui.log_tail(7)
+    assert r["truncated"] and r["text"] == "done\n"
+    assert ui.log_tail(8) == {"id": 8, "path": str(tmp_path / "8.log"), "text": "", "truncated": False}
+
+
 def test_old_database_gets_new_columns(tmp_path):
     import sqlite3
 
@@ -183,3 +207,58 @@ def test_priority_jobs_go_first_and_long_jobs_count_more(tmp_path):
     order = [j["id"] for j in control.ordered_queue(con, fair=True, now=0.0)]
     # c's job was prioritized; a's first job is 2 h, so b gets two turns before a's next one.
     assert order == [5, 1, 3, 4, 2]
+
+
+def test_dragging_jobs_in_the_queue(tmp_path):
+    from gpushift import control, db
+
+    con = _queue_db(tmp_path, [("a", 600, 0)] * 4)
+    order = lambda: [j["id"] for j in control.ordered_queue(con)]  # noqa: E731
+    assert control.move(con, 4, before=2) == "job 4 moved to before job 2"
+    assert order() == [1, 4, 2, 3]
+    assert db.get_job(con, 4)["prio"] == 1  # moved up: pinned like --priority
+    control.move(con, 1, before=None)
+    assert order() == [4, 2, 3, 1]
+    assert db.get_job(con, 1)["prio"] == 0
+    control.move(con, 3, before=4)
+    assert order() == [3, 4, 2, 1]
+    for _ in range(60):  # halving the gap again and again eventually renumbers the queue
+        control.move(con, 2, before=4)
+        control.move(con, 4, before=2)
+    assert order() == [3, 4, 2, 1]
+    assert "not queued" in control.move(con, 99, before=None)
+    assert "not queued" in control.move(con, 2, before=99)
+
+
+def test_a_job_cannot_be_moved_ahead_of_a_job_it_waits_for(tmp_path):
+    from gpushift import control, db
+
+    con = _queue_db(tmp_path, [("a", 600, 0)] * 4)
+    db.update(con, 3, after_ids=[2])  # job 3: --after 2
+    order = lambda: [j["id"] for j in control.ordered_queue(con)]  # noqa: E731
+    assert "can't go ahead" in control.move(con, 3, before=2)
+    assert "can't go ahead" in control.move(con, 3, before=1)
+    assert "can't go ahead" in control.move(con, 2, before=None)  # the job it waits for, behind it
+    assert "can't go ahead" in control.to_front(con, 3)
+    assert order() == [1, 2, 3, 4]
+    # Moving both, or moving them around each other in the allowed order, is fine.
+    assert "moved" in control.move(con, 2, before=1)
+    assert "moved" in control.move(con, 3, before=1)
+    assert order() == [2, 3, 1, 4]
+    assert "moved" in control.to_front(con, 2)
+
+
+def test_cpu_reading():
+    import time
+
+    from gpushift import cpustat
+
+    s = cpustat.Sampler()
+    sum(i * i for i in range(2_000_000))  # some CPU work to show up
+    time.sleep(0.2)
+    r = s.sample()
+    assert 0 <= r["load_pct"] <= 100 and len(r["cores_pct"]) >= 1
+    assert 0 < r["mem_used_mb"] <= r["mem_total_mb"]
+    assert len(r["top"]) <= cpustat.TOP and all(t["pct"] > 0 and t["name"] for t in r["top"])
+    assert r["disks"] and all(0 <= d["free_mb"] <= d["total_mb"] for d in r["disks"])
+    assert r["io"] is None or (r["io"]["read_mb_s"] >= 0 and r["io"]["write_mb_s"] >= 0)

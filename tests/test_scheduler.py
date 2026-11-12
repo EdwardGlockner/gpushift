@@ -1,6 +1,8 @@
+import math
+
 import pytest
 
-from gpushift.scheduler import Machine, PresetError, Req, plan, preset_requirements, simulate
+from gpushift.scheduler import Machine, PresetError, Req, plan, preset_requirements, reorder, simulate
 
 # ------------------------------------------------------------ presets
 
@@ -230,3 +232,107 @@ def test_packing_respects_memory_and_can_be_off():
     assert plan([sized(1, 8000)], [], MP) == []  # bigger than any GPU's capacity
     off = Machine(gpus=[0, 1], shared_gpu=1, slots=4)  # capacity None: packing off
     assert plan([sized(1, 1000), sized(2, 1000), sized(3, 1000)], [], off) == [(1, [0]), (2, [1])]
+
+
+# ------------------------------------------------------------ running jobs ahead of their turn
+
+H = 3600.0
+Q = 900.0  # a 15-minute whole-machine job
+
+
+def test_short_whole_machine_jobs_go_before_a_long_one_gpu_job():
+    # Empty machine. In turn order the 4.5 h one-GPU job starts first and the
+    # eight 15-minute exclusive jobs wait for it, leaving GPU 0 idle for hours.
+    queue = [(one(1), 4.5 * H)] + [(excl(10 + i), Q) for i in range(8)]
+    base = simulate(queue, [], M2)
+    assert base[1] == 0 and base[10] == 4.5 * H
+    res = reorder(queue, [], M2)
+    # Half its own run time (2.25 h) is what job 1 may lose: all eight fit in 2 h.
+    assert res.moved == list(range(10, 18)) and res.passed == [1]
+    assert res.est[10] == 0 and res.est[1] == 2 * H
+    assert plan([r for r, _ in queue if r.id in res.moved] + [one(1)], [], M2)[0] == (10, [0, 1])
+
+
+def test_reorder_never_delays_a_job_more_than_allowed():
+    # Job 1 runs 1 h: it may be pushed back max(1 h, 30 min) = 1 h, so only
+    # four of the 15-minute jobs may go first.
+    queue = [(one(1), H)] + [(excl(10 + i), Q) for i in range(8)]
+    res = reorder(queue, [], M2)
+    assert res.moved == [10, 11, 12, 13] and res.est[1] == H
+    assert reorder(queue, [], M2, slack=0).moved == []  # off
+
+
+def test_a_long_job_does_not_take_an_idle_gpu_if_it_delays_the_next_job_for_hours():
+    # Tonight: GPU 1 busy 4.5 h, a 15-minute exclusive job waits for it, and a
+    # 16 h job could use idle GPU 0, but would push the exclusive job back 11.5 h.
+    running = [(one(1), [1], 4.5 * H)]
+    queue = [(excl(2), Q), (one(3), 16 * H)]
+    assert reorder(queue, running, M2).moved == []
+
+
+def test_prioritized_jobs_are_never_pushed_back():
+    queue = [(one(1), 4.5 * H)] + [(excl(10 + i), Q) for i in range(8)]
+    assert reorder(queue, [], M2, pinned={1}).moved == []
+
+
+def test_promises_stop_a_job_being_passed_again_and_again():
+    # Job 1 (1 h) may lose 1 h in total, however many times the daemon reorders.
+    dur = {1: H, **{10 + i: Q for i in range(8)}}
+    queue = [one(1)] + [excl(10 + i) for i in range(8)]
+    promised: dict[int, float] = {}
+    t, ran = 0.0, []
+    while True:
+        res = reorder([(r, dur[r.id]) for r in queue], [], M2, limits={k: v - t for k, v in promised.items()})
+        if not res.moved:
+            break
+        for i, off in res.limits.items():
+            promised[i] = min(promised.get(i, math.inf), t + off)
+        ran.append(res.moved[0])  # it runs alone (exclusive), then the daemon decides again
+        queue = [r for r in queue if r.id != res.moved[0]]
+        t += Q
+    assert ran == [10, 11, 12, 13] and t == H
+
+
+def test_equal_jobs_keep_their_order():
+    # Job 11 is a bit shorter than job 10, but the same size: it never passes it.
+    queue = [(excl(10), Q), (excl(11), Q - 120), (one(12), 16 * H)]
+    assert reorder(queue, [], M2).moved == []
+    est = simulate(queue, [], M2, slack=H)
+    assert est[10] < est[11] < est[12]
+
+
+def test_forecast_applies_reorders_later_on():
+    # GPU 1 busy 4 h. When it frees up, the short exclusive jobs run before the
+    # 16 h job, so they are forecast at 4 h, 4 h 15, ... not after 20 h.
+    running = [(one(1), [1], 4 * H)]
+    queue = [(excl(10), Q), (one(12), 16 * H), (excl(11), Q)]
+    plain = simulate(queue, running, M2)
+    assert plain[11] == 4 * H + Q + 16 * H
+    est = simulate(queue, running, M2, slack=H)
+    assert (est[10], est[11], est[12]) == (4 * H, 4 * H + Q, 4 * H + 2 * Q)
+
+
+def test_a_job_waiting_for_another_neither_starts_nor_holds_anything_back():
+    # Eval 11 waits for train 10 (4 h on GPU 0). GPU 1 is free: job 12 behind
+    # the eval starts now; the eval is forecast for when the training ends.
+    running = [(one(10), [0], 4 * H)]
+    queue = [(one(11), Q), (one(12), H)]
+    est = simulate(queue, running, M2, after={11: {10}})
+    assert est == {11: 4 * H, 12: 0.0}
+    # Even an exclusive job that waits does not block the queue behind it.
+    est = simulate([(excl(11), Q), (one(12), H)], running, M2, after={11: {10}})
+    assert est[12] == 0.0 and est[11] == 4 * H
+    # Waiting for a running job without an estimate: start unknown.
+    assert simulate(queue, [(one(10), [0], None)], M2, after={11: {10}})[11] is None
+    # Waiting for a queued job: after that one ends.
+    out = {}
+    est = simulate([(one(20), H), (one(21), Q)], [], M2, after={20: {21}}, out=out)
+    assert est == {21: 0.0, 20: Q}
+    assert out[20] == (Q, [0], Q + H) and out[21][0] == 0.0
+
+
+def test_reorder_never_moves_a_job_that_waits():
+    running = [(one(1), [1], 4 * H)]
+    queue = [(excl(10), Q), (one(12), 16 * H), (excl(11), Q)]
+    res = reorder(queue, running, M2, slack=H, after={10: {99}, 11: {99}})
+    assert 10 not in res.moved and 11 not in res.moved

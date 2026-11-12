@@ -32,6 +32,14 @@ class Queue:
             if k.startswith("GPUSHIFT_"):
                 monkeypatch.setenv(k, v)
         self.daemon = None
+        self.write_config("")
+
+    def write_config(self, text: str) -> None:
+        """Write config.toml. Test daemons keep the dashboard off unless the
+        test sets ui_port, so they never take the user's dashboard port."""
+        if "ui_port" not in text:
+            text = "ui_port = 0\n" + text
+        (self.home / "config.toml").write_text(text)
 
     def set_gpu_procs(self, used: dict[int, int]) -> None:
         import json
@@ -42,6 +50,8 @@ class Queue:
 
     # -- processes
     def start(self):
+        # A second daemon would exit at once, and the first would then never be cleaned up.
+        assert self.daemon is None or self.daemon.poll() is not None, "the test daemon is already running"
         self.daemon = subprocess.Popen(
             [PY, "-m", "gpushift", "daemon"],
             env=self.env,

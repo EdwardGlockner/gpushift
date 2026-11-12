@@ -33,18 +33,64 @@ button:hover { border-color: var(--muted); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.danger { color: var(--bad); }
 button.small { padding: 1px 8px; font-size: 12px; }
-.gpus { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
-.card .top { display: flex; justify-content: space-between; gap: 8px; }
-.bar { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; display: flex; }
-.bar span { display: block; height: 100%; }
+.gpus { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 12px; }
+.system { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
+.cpu-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
+.cpu-cols > div { display: grid; gap: 12px; align-content: start; }
+@media (max-width: 900px) { .system, .cpu-cols { grid-template-columns: minmax(0, 1fr); } }
+.drives { display: grid; gap: 10px; }
+.drive { display: grid; grid-template-columns: 2.6em minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
+.drive .mount { font-weight: 600; font-variant-numeric: tabular-nums; }
+.drive .free { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.card .foot { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; font-variant-numeric: tabular-nums; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 12px; min-width: 0; }
+.card .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
+.stat { display: grid; gap: 3px; min-width: 0; }
+.stat .k { font-size: 11.5px; color: var(--muted); }
+.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .v small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.stat.wide { grid-column: span 3; }
+.bar { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; }
+.bar span { display: block; height: 100%; border-radius: 3px; }
+.spark { width: 100%; height: 34px; display: block; }
+.cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(28px, 1fr)); gap: 4px; }
+.cores .bar { height: 44px; display: flex; flex-direction: column-reverse; }
+.cores .bar span { border-radius: 0; }
+.top5 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.top5 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job { border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 8px; padding: 6px 10px; background: var(--bg); display: grid; gap: 2px; min-width: 0; }
 .job .row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .job b { font-weight: 600; }
+.job .head { display: flex; gap: 8px; align-items: flex-start; }
+.job .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.job .btns { display: flex; gap: 6px; flex-shrink: 0; }
+.tl { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 10px 14px 12px; display: grid; gap: 6px; }
+.tl-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: center; }
+.tl-label { font-size: 12.5px; font-weight: 600; }
+.tl-track { position: relative; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.tl-axis { position: relative; height: 16px; }
+.tl-tick { position: absolute; transform: translateX(-50%); font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tl-grid { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--track); }
+.tl-bar { position: absolute; height: 22px; border-radius: 4px; background: var(--c); color: #fff; font-size: 11.5px; line-height: 22px;
+  padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
+.tl-bar.queued { background: color-mix(in srgb, var(--c) 30%, var(--bg)); color: var(--ink); border: 1px dashed var(--c); line-height: 20px; }
+.tl-bar.frozen { background: repeating-linear-gradient(135deg, var(--c) 0 6px, color-mix(in srgb, var(--c) 55%, var(--bg)) 6px 12px); }
+.tl-bar.open { -webkit-mask-image: linear-gradient(to right, #000 75%, transparent); mask-image: linear-gradient(to right, #000 75%, transparent); }
+.tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--bad); }
+.tl-note { font-size: 12.5px; color: var(--muted); }
+.cmd .cwd { color: var(--ink); opacity: .75; }
+details.fold > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary h2 { margin: 0; }
+details.fold > summary::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform .15s; }
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold[open] > summary { margin-bottom: 8px; }
 .cmd { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { font-size: 11.5px; font-weight: 600; padding: 0 6px; border-radius: 4px; border: 1px solid; }
 .badge.frozen { color: var(--frozen); } .badge.evicting { color: var(--warn); } .badge.over { color: var(--warn); }
 .badge.failed { color: var(--bad); } .badge.done { color: var(--good); } .badge.cancelled { color: var(--muted); }
+.badge.span { color: var(--muted); font-weight: 400; }
 .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -52,9 +98,26 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--p
 tr:last-child td { border-bottom: 0; }
 td.cmd { max-width: 380px; }
 td.note { white-space: normal; color: var(--bad); font-size: 12.5px; min-width: 200px; }
+td.actions { text-align: right; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-right: 6px; }
 .empty { color: var(--muted); padding: 10px 2px; }
 #error { color: var(--bad); }
+.grip { border: 0; background: none; padding: 0 4px; color: var(--muted); cursor: grab; font-size: 15px; line-height: 1; }
+.grip:hover { color: var(--ink); }
+td.gripcell { width: 1%; padding-right: 0; }
+tr.dragging { opacity: .4; }
+tr.drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
+tr.drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
+button.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+.state.frozen { color: var(--frozen); }
+.state.evicting { color: var(--warn); }
+dialog { width: min(1000px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--bg); color: var(--ink); }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+dialog .head { display: flex; gap: 12px; align-items: baseline; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+dialog .head .path { font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+dialog pre { margin: 0; padding: 10px 14px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all;
+  overflow: auto; height: min(70vh, 700px); }
 </style>
 
 <main>
@@ -69,28 +132,47 @@ td.note { white-space: normal; color: var(--bad); font-size: 12.5px; min-width: 
   </header>
 
   <section><h2>GPUs</h2><div id="gpus" class="gpus"></div></section>
+  <section><h2>System</h2><div id="system" class="system"></div></section>
+  <section><h2>Timeline</h2><div id="timeline"></div></section>
   <section><h2 id="qhead">Queue</h2><div id="queue"></div></section>
-  <section><h2>Recently ended</h2><div id="recent"></div></section>
+  <section><details id="recentbox" class="fold"><summary><h2 id="recenthead">Recently ended</h2></summary><div id="recent"></div></details></section>
 </main>
+
+<dialog id="logbox" aria-labelledby="logtitle">
+  <div class="head"><b id="logtitle">Log</b><span id="logpath" class="path muted"></span>
+    <button id="logclose" type="button">Close</button></div>
+  <pre id="logtext"></pre>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+// "45 s", "13 min", "4 h 25 min", "2 d 3 h"
 const dur = (s) => {
   if (s == null) return "?";
   s = Math.max(0, Math.round(s));
-  if (s < 60) return s + "s";
-  const m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
-  return d ? `${d}d${String(h % 24).padStart(2, "0")}h` : h ? `${h}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
+  if (s < 60) return s + " s";
+  const m = Math.round(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d) return h % 24 ? `${d} d ${h % 24} h` : `${d} d`;
+  if (h) return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
+  return `${m} min`;
 };
-const ago = (iso) => (iso ? dur((Date.now() - Date.parse(iso)) / 1000) : "?");
-const until = (iso, mode) => {
-  if (mode !== "normal") return "paused";
-  if (!iso) return "unknown";
-  const s = (Date.parse(iso) - Date.now()) / 1000;
-  return s < 30 ? "now" : "~" + dur(s);
+const secsSince = (iso) => (Date.now() - Date.parse(iso)) / 1000;
+const ago = (iso) => (iso ? dur(secsSince(iso)) + " ago" : "?");
+// Clock time, with the day when it isn't today: "03:42", "tomorrow 03:42", "Sat 14:00"
+const clock = (iso) => {
+  const t = new Date(iso), now = new Date();
+  const hm = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const days = Math.round((day(t) - day(now)) / 864e5);
+  if (days === 0) return hm;
+  if (days === 1) return "tomorrow " + hm;
+  if (days === -1) return "yesterday " + hm;
+  return t.toLocaleDateString([], { weekday: "short" }) + " " + hm;
 };
 const gb = (mb) => (mb == null ? "?" : (mb / 1024).toFixed(1));
+// Drive sizes: "16.3 GB", "4.6 TB"
+const size = (mb) => (mb >= 1024 * 1000 ? `${(mb / 1024 / 1024).toFixed(1)} TB` : `${(mb / 1024).toFixed(mb >= 100 * 1024 ? 0 : 1)} GB`);
 const who = (j) => (j.session ? `${j.project || "Claude"} · ${j.session.slice(0, 4)}` : "you");
 const color = (j) => {
   if (!j.session) return "#bc4c00";
@@ -98,25 +180,199 @@ const color = (j) => {
   for (const c of j.session) h = (h * 31 + c.charCodeAt(0)) % 360;
   return `hsl(${h} 60% 50%)`;
 };
+const val = (v, unit, digits = 0) => (v == null ? '<span class="muted">n/a</span>' : `${Number(v).toFixed(digits)}<small> ${unit}</small>`);
 
-async function post(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "X-Gpushift": "1", "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
-  const res = await r.json().catch(() => ({}));
-  if (!res.ok) $("error").textContent = res.error || "action failed";
-  refresh();
+// Load history per GPU for the sparkline: the last 5 minutes of 2-second samples.
+const history = {};
+const SAMPLES = 150;
+
+function spark(points) {
+  if (points.length < 2) return '<svg class="spark"></svg>';
+  const w = 300, h = 34, n = SAMPLES - 1;
+  const xy = points.map((p, i) => `${((i + SAMPLES - points.length) / n) * w},${h - 1 - (p / 100) * (h - 2)}`);
+  const first = xy[0].split(",")[0];
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <polygon points="${first},${h} ${xy.join(" ")} ${w},${h}" fill="var(--accent)" opacity=".15"/>
+    <polyline points="${xy.join(" ")}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
 }
+
+// "running 4 h 12 min of ~16 h · done ~21:10"
+function runLine(j) {
+  const exp = j.expected_duration_s;
+  if (j.state === "frozen") {
+    const mem = j.resumable || j.restartable ? "" : " · still holds its GPU memory";
+    return `<span class="state frozen">frozen since ${clock(j.frozen_at)}</span> · ran ${dur(j.runtime_s)}${mem}`;
+  }
+  if (j.state === "evicting") return `<span class="state evicting">saving a checkpoint before it stops</span> · ran ${dur(j.runtime_s)}`;
+  let t = `running ${dur(j.runtime_s)}`;
+  if (exp && j.runtime_s <= exp) {
+    const end = new Date(Date.now() + (exp - j.runtime_s) * 1000).toISOString();
+    t += ` of ~${dur(exp)} · done ~${clock(end)}`;
+  } else if (exp) {
+    t += ` · <span style="color:var(--warn)">over its ~${dur(exp)} estimate</span>`;
+  }
+  return t;
+}
+
+// Cancel needs a second click within a few seconds: one slip shouldn't throw away hours of training.
+let armed = null, armTimer = null;
+const cancelBtn = (j) => armed === j.id
+  ? `<button class="small armed" data-act="cancel" data-id="${j.id}" type="button">Click again to cancel</button>`
+  : `<button class="small danger" data-act="cancel" data-id="${j.id}" type="button">Cancel</button>`;
+const logBtn = (j) => `<button class="small" data-act="log" data-id="${j.id}" type="button">Log</button>`;
 
 function jobCard(j) {
   const exp = j.expected_duration_s;
   const badges = [];
   if (j.state !== "running") badges.push(`<span class="badge ${j.state}">${j.state}</span>`);
-  if (j.state === "running" && exp && j.runtime_s > exp) badges.push(`<span class="badge over">over its ${dur(exp)} estimate</span>`);
+  if (j.gpus.length > 1) badges.push(`<span class="badge span">uses GPU ${j.gpus.join(" + ")}</span>`);
   const mem = j.vram_now_mb != null ? `${gb(j.vram_now_mb)} GB` : "";
   return `<div class="job" style="--c:${color(j)}">
-    <div class="row"><b>${esc(j.tag || "job " + j.id)}</b><span class="muted">job ${j.id} · ${esc(j.preset)} · ${esc(who(j))}</span>
-      ${badges.join("")}<span class="spacer"></span><span class="muted">${dur(j.runtime_s)}${mem ? " · " + mem : ""}</span>
-      <button class="small danger" data-act="cancel" data-id="${j.id}" type="button">Cancel</button></div>
-    <div class="cmd" title="${esc(j.command)}">${esc(j.command)}</div></div>`;
+    <div class="head"><div class="title"><b>${esc(j.tag || "job " + j.id)}</b><span class="muted">job ${j.id} · ${esc(who(j))}</span>${badges.join("")}</div>
+      <div class="btns">${logBtn(j)}${cancelBtn(j)}</div></div>
+    <div class="muted">${runLine(j)}${mem ? " · " + mem : ""}</div>
+    ${promptLine(j)}</div>`;
+}
+
+// Where and what it runs, like a shell prompt: "C:\…\Documents\smallllm> python train.py"
+const promptLine = (j) => `<div class="cmd" title="${esc(`in ${j.cwd}\n${j.command}`)}"><span class="cwd">${esc(shortPath(j.cwd))}&gt;</span> ${esc(j.command)}</div>`;
+
+function gpuCard(g, jobs) {
+  const used = g.mem_used_mb ?? 0, total = g.mem_total_mb || 1;
+  const h = history[g.index] || [];
+  const hot = g.temp_c != null && g.temp_c >= 83;
+  return `<div class="card"><div class="top"><b>GPU ${g.index} · ${esc((g.name || "").replace("NVIDIA ", "").replace("GeForce ", ""))}</b>
+      <span class="muted">${g.shared ? "shared GPU for --light jobs" : ""}</span></div>
+    <div class="stats">
+      <div class="stat wide"><span class="k">Load, last 5 minutes</span><span class="v">${val(g.util_pct, "%")}</span>${spark(h)}</div>
+      <div class="stat wide"><span class="k">Memory</span><span class="v">${gb(g.mem_used_mb)}<small> / ${gb(g.mem_total_mb)} GB</small></span>
+        <div class="bar"><span style="width:${(100 * used) / total}%;background:var(--muted)"></span></div></div>
+      <div class="stat"><span class="k">Temperature</span><span class="v" ${hot ? 'style="color:var(--bad)"' : ""}>${val(g.temp_c, "°C")}</span></div>
+      <div class="stat"><span class="k">Power</span><span class="v">${val(g.power_w, g.power_limit_w ? `/ ${Math.round(g.power_limit_w)} W` : "W")}</span></div>
+      <div class="stat"><span class="k">Fan · clock</span><span class="v">${val(g.fan_pct, "%")}<small> · ${g.clock_mhz ?? "?"} MHz</small></span></div>
+    </div>
+    ${jobs.length ? jobs.map(jobCard).join("") : '<div class="empty">No job on this GPU.</div>'}</div>`;
+}
+
+const loadColor = (p) => (p >= 90 ? "var(--bad)" : p >= 70 ? "var(--warn)" : "var(--accent)");
+
+function cpuCard(c, jobs) {
+  const jobsHtml = jobs.map(jobCard).join("");
+  if (!c) return `<div class="card"><div class="top"><b>CPU</b></div><div class="empty">No reading: the gpushift daemon isn't running.</div>${jobsHtml}</div>`;
+  const busy = c.load_pct >= 90;
+  const memPct = (100 * c.mem_used_mb) / (c.mem_total_mb || 1);
+  return `<div class="card"><div class="top"><b>CPU · ${c.cores_pct.length} cores</b>
+      ${busy ? '<span style="color:var(--bad)">busy: programs may be slowed down</span>' : ""}</div>
+    <div class="cpu-cols">
+      <div>
+        <div class="stat"><span class="k">Load, last 5 minutes</span><span class="v" ${busy ? 'style="color:var(--bad)"' : ""}>${val(c.load_pct, "%")}</span>${spark(history.cpu || [])}</div>
+        <div class="stat"><span class="k">Per core</span><div class="cores">${c.cores_pct.map((p) =>
+          `<div class="bar" title="${Math.round(p)}%"><span style="height:${p}%;background:${loadColor(p)}"></span></div>`).join("")}</div></div>
+      </div>
+      <div>
+        <div class="stat"><span class="k">Memory</span><span class="v">${gb(c.mem_used_mb)}<small> / ${gb(c.mem_total_mb)} GB</small></span>
+          <div class="bar"><span style="width:${memPct}%;background:${memPct >= 90 ? "var(--bad)" : "var(--muted)"}"></span></div></div>
+        <div class="stat"><span class="k">Busiest programs (share of the whole CPU)</span><div class="top5">${c.top.map((t) =>
+          `<span class="name">${t.name.startsWith("job ") ? `<b>${esc(t.name)}</b> <span class="muted">(gpushift)</span>` : esc(t.name)}</span><span>${t.pct.toFixed(0)}%</span>`).join("") || '<span class="muted">nothing busy</span>'}</div></div>
+      </div>
+    </div>${jobsHtml}</div>`;
+}
+
+function sample(s) {
+  const add = (k, v) => { if (v == null) return; const h = (history[k] ||= []); h.push(v); if (h.length > SAMPLES) h.shift(); };
+  for (const g of s.gpus) add(g.index, g.util_pct);
+  if (s.cpu) add("cpu", s.cpu.load_pct);
+}
+
+// A drive is low when under 10% or 20 GB is free (checkpoints fail when it fills up).
+const lowDrive = (d) => d.free_mb < 20 * 1024 || d.free_mb < d.total_mb * 0.1;
+const driveName = (d) => d.mount.replace(/[\\/]$/, "") || "/";
+// "C:\…\Documents\smallllm" for long paths: the drive and the last two folders.
+const shortPath = (p) => {
+  p = p || "";
+  const parts = (p || "").split(/[\\/]/).filter(Boolean), sep = p.includes("\\") ? "\\" : "/";
+  if (p.length <= 48 || parts.length <= 3) return p;
+  return (p.startsWith("/") ? "/" : "") + [parts[0], "…", ...parts.slice(-2)].join(sep);
+};
+
+function storageCard(c) {
+  if (!c || !c.disks) return `<div class="card"><div class="top"><b>Storage</b></div><div class="empty">No reading: the gpushift daemon isn't running.</div></div>`;
+  const rows = c.disks.map((d) => {
+    const pct = (100 * d.used_mb) / (d.total_mb || 1), low = lowDrive(d);
+    return `<div class="drive" title="${esc(d.mount)}: ${size(d.used_mb)} of ${size(d.total_mb)} used${low ? " (almost full)" : ""}">
+      <span class="mount">${esc(driveName(d))}</span>
+      <div class="bar"><span style="width:${pct}%;background:${low ? "var(--bad)" : "var(--muted)"}"></span></div>
+      <span class="free" ${low ? 'style="color:var(--bad)"' : ""}>${size(d.free_mb)} free <span class="muted">of ${size(d.total_mb)}</span></span>
+    </div>`;
+  }).join("");
+  const io = c.io ? `<div class="foot">Disk traffic: read ${c.io.read_mb_s} MB/s · write ${c.io.write_mb_s} MB/s</div>` : "";
+  return `<div class="card"><div class="top"><b>Storage</b><span class="muted">${c.disks.length} drive${c.disks.length === 1 ? "" : "s"}</span></div>
+    <div class="drives">${rows || '<div class="empty">No drives found.</div>'}</div>${io}</div>`;
+}
+
+// Which job runs on which GPU, and when: running jobs from their start, queued
+// jobs where the forecast places them. Starts 1 h back, runs to the last known end.
+function timelineView(s) {
+  const tl = s.timeline;
+  if (!tl) return "";
+  const now = tl.now, H = 3600;
+  const jobs = Object.fromEntries([...s.running, ...s.queue].map((j) => [j.id, j]));
+  const ends = tl.items.map((i) => i.end).filter((e) => e != null);
+  const t0 = now - H;
+  const t1 = Math.min(now + 72 * H, Math.max(now + 6 * H, ...ends.map((e) => e + H / 2)));
+  const x = (t) => (100 * (Math.min(Math.max(t, t0), t1) - t0)) / (t1 - t0);
+  // Ticks on whole local hours, every 1, 2, 3, 6, 12 or 24 h: at most ~8 of them.
+  const stepH = [1, 2, 3, 6, 12, 24].find((h) => (t1 - t0) / (h * H) <= 8);
+  const local = [];
+  const d = new Date(t0 * 1000);
+  d.setMinutes(0, 0, 0);
+  for (d.setHours(d.getHours() + 1); d.getTime() / 1000 < t1; d.setHours(d.getHours() + 1)) {
+    if (d.getHours() % stepH === 0) local.push(d.getTime() / 1000);
+  }
+  const tickLabel = (t) => {
+    const d = new Date(t * 1000), hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    return d.getHours() === 0 ? d.toLocaleDateString([], { weekday: "short" }) : hm;
+  };
+  const grid = local.filter((t) => t > t0 && t < t1).map((t) => `<div class="tl-grid" style="left:${x(t)}%"></div>`).join("");
+  const axis = `<div class="tl-row"><span></span><div class="tl-axis">${local.filter((t) => x(t) > 3 && x(t) < 96)
+    .map((t) => `<span class="tl-tick" style="left:${x(t)}%">${tickLabel(t)}</span>`).join("")}</div></div>`;
+
+  const rows = s.gpus.map((g) => ({ label: `GPU ${g.index}`, items: tl.items.filter((i) => i.gpus.includes(g.index)) }));
+  const cpu = tl.items.filter((i) => !i.gpus.length);
+  if (cpu.length) rows.push({ label: "CPU", items: cpu });
+
+  const rowHtml = rows.map((row) => {
+    // Overlapping jobs (shared GPU, packing) get their own lane.
+    const lanes = [];
+    const placed = [...row.items].sort((a, b) => a.start - b.start).map((i) => {
+      let lane = lanes.findIndex((end) => end <= i.start);
+      if (lane < 0) { lane = lanes.length; lanes.push(0); }
+      lanes[lane] = i.end ?? Infinity;
+      return { ...i, lane };
+    });
+    const n = Math.max(1, lanes.length);
+    const bars = placed.map((i) => {
+      const j = jobs[i.id] || { id: i.id };
+      const end = i.end ?? t1, left = x(i.start), width = Math.max(0.6, x(end) - left);
+      const when = `${clock(new Date(i.start * 1000).toISOString())} → ${i.end ? clock(new Date(i.end * 1000).toISOString()) : "unknown"}`;
+      const cls = [i.state === "queued" ? "queued" : i.state === "frozen" ? "frozen" : "", i.end ? "" : "open"].join(" ");
+      return `<div class="tl-bar ${cls}" style="--c:${color(j)};left:${left}%;width:${width}%;top:${3 + i.lane * 26}px"
+        title="${esc(`job ${i.id} ${j.tag || ""} · ${i.state}\n${when}`)}">${esc(j.tag || "job " + i.id)}</div>`;
+    }).join("");
+    return `<div class="tl-row"><span class="tl-label">${row.label}</span>
+      <div class="tl-track" style="height:${n * 26 + 4}px">${grid}${bars}<div class="tl-now" style="left:${x(now)}%" title="now"></div></div></div>`;
+  }).join("");
+
+  let note = "";
+  if (s.mode !== "normal") note = "The queue is paused: nothing new starts until it is resumed.";
+  else if (tl.unplaced.length) {
+    const open = tl.items.filter((i) => i.end == null && i.state !== "queued").map((i) => i.id);
+    const n = tl.unplaced.length, jobsTxt = `${n} waiting job${n === 1 ? "" : "s"}`;
+    note = open.length
+      ? `${jobsTxt} can't be placed yet: they wait for job ${open.join(", ")}, which ${open.length === 1 ? "has" : "have"} no expected end (no estimate, or past it).`
+      : `${jobsTxt} can't be placed yet: a job ahead of them has no time estimate.`;
+  }
+  return `<div class="tl">${axis}${rowHtml}${note ? `<div class="tl-note">${esc(note)}</div>` : ""}</div>`;
 }
 
 function render(s) {
@@ -124,62 +380,195 @@ function render(s) {
   const mode = $("mode");
   mode.className = "pill " + (free ? "free" : "normal");
   mode.textContent = !free ? "running" : s.auto_free ? `paused: ${(s.auto_free.apps || []).join(", ")} is using the GPU` : "paused (free mode)";
-  $("meta").textContent = `${s.slots.used}/${s.slots.total} slots · daemon ${s.daemon.running ? "running" : "NOT running"}${s.fair_share ? " · sessions take turns" : ""}`;
+  const meta = [`${s.running.length} running`, `${s.queue.length} waiting`];
+  if (!s.daemon.running) meta.push("the gpushift daemon is NOT running (gpushift start)");
+  $("meta").textContent = meta.join(" · ");
+  document.title = `${free ? "paused · " : ""}${s.running.length} running · ${s.queue.length} waiting · gpushift`;
   $("free").hidden = free;
   $("resume").hidden = !free;
 
   const byId = Object.fromEntries(s.running.map((j) => [j.id, j]));
-  $("gpus").innerHTML = s.gpus.map((g) => {
-    const used = g.mem_used_mb ?? 0, total = g.mem_total_mb || 1;
-    const jobs = g.jobs.map((id) => byId[id]).filter(Boolean);
-    return `<div class="card"><div class="top"><b>GPU ${g.index} · ${esc((g.name || "").replace("NVIDIA ", "").replace("GeForce ", ""))}</b>
-      <span class="muted">${gb(g.mem_used_mb)} / ${gb(g.mem_total_mb)} GB${g.shared ? " · shared" : ""}</span></div>
-      <div class="bar"><span style="width:${(100 * used) / total}%;background:var(--muted)"></span></div>
-      ${jobs.length ? jobs.map(jobCard).join("") : '<div class="empty">idle</div>'}</div>`;
-  }).join("");
-  const cpu = s.running.filter((j) => !j.gpus.length);
-  if (cpu.length) $("gpus").innerHTML += `<div class="card"><div class="top"><b>CPU</b></div>${cpu.map(jobCard).join("")}</div>`;
+  let html = s.gpus.map((g) => gpuCard(g, g.jobs.map((id) => byId[id]).filter(Boolean))).join("");
+  $("gpus").innerHTML = html;
+  $("timeline").innerHTML = timelineView(s);
+  $("system").innerHTML = cpuCard(s.cpu, s.running.filter((j) => !j.gpus.length)) + storageCard(s.cpu);
 
   $("qhead").textContent = `Queue (${s.queue.length} waiting)`;
-  $("queue").innerHTML = s.queue.length ? `<div class="table"><table><thead><tr><th>#</th><th>Job</th><th>Who</th><th>Preset</th>
-    <th>Waiting</th><th>Starts</th><th>Command</th><th></th></tr></thead><tbody>${s.queue.map((j) => `<tr>
-      <td>${j.position}</td><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}${j.resume ? " · resumes" : ""}</span></td>
-      <td>${esc(who(j))}</td><td>${esc(j.preset)}</td><td>${ago(j.submitted_at)}</td><td>${until(j.est_start, s.mode)}</td>
+  const queue = [...s.queue].sort((a, b) => a.turn - b.turn);
+  $("queue").innerHTML = queue.length ? `<div class="table"><table><thead><tr><th></th><th>#</th><th>Job</th><th>Who</th><th>Preset</th>
+    <th>Queued</th><th>Takes</th><th>Command</th><th></th></tr></thead><tbody>${queue.map((j) => `<tr draggable="true" data-id="${j.id}">
+      <td class="gripcell"><button class="grip" data-grip="${j.id}" type="button" title="Drag to move it in the queue (or focus it and use the arrow keys)" aria-label="Move job ${j.id}">⠿</button></td>
+      <td>${j.turn}</td><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}${j.resume ? " · resumes" : ""}${j.waiting_for && j.waiting_for.length ? ` · after ${j.waiting_for.join(", ")}` : ""}</span></td>
+      <td>${esc(who(j))}</td><td>${esc(j.preset)}</td><td title="${esc(ago(j.submitted_at))}">${clock(j.submitted_at)}</td>
+      <td>${j.expected_duration_s ? "~" + dur(j.expected_duration_s) : '<span class="muted">unknown</span>'}</td>
       <td class="cmd" title="${esc(j.command)}">${esc(j.command)}</td>
-      <td><button class="small" data-act="priority" data-id="${j.id}" type="button">To front</button>
-          <button class="small danger" data-act="cancel" data-id="${j.id}" type="button">Cancel</button></td></tr>`).join("")}</tbody></table></div>`
+      <td class="actions">${cancelBtn(j)}</td></tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">Nothing waiting.</div>';
+  if (focusGrip != null) { document.querySelector(`[data-grip="${focusGrip}"]`)?.focus(); focusGrip = null; }
 
-  $("recent").innerHTML = s.recent.length ? `<div class="table"><table><thead><tr><th>Job</th><th>Result</th><th>Ran</th><th>Ended</th><th>Details</th><th></th></tr></thead>
+  $("recenthead").textContent = `Recently ended (${s.recent.length})`;
+  $("recent").innerHTML = s.recent.length ? `<div class="table"><table><thead><tr><th>Job</th><th>Who</th><th>Result</th><th>Ran for</th><th>Ended</th><th>Details</th><th></th></tr></thead>
     <tbody>${s.recent.map((j) => `<tr><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}</span></td>
-      <td><span class="badge ${j.state}">${j.state}</span></td><td>${dur(j.runtime_s)}</td><td>${ago(j.ended_at)} ago</td>
-      <td class="note">${j.state === "failed" ? esc(j.note || "") : ""}</td>
-      <td><button class="small" data-act="retry" data-id="${j.id}" type="button">Run again</button></td></tr>`).join("")}</tbody></table></div>`
+      <td>${esc(who(j))}</td><td><span class="badge ${j.state}">${j.state}</span></td><td>${dur(j.runtime_s)}</td><td>${clock(j.ended_at)} <span class="muted">· ${ago(j.ended_at)}</span></td>
+      <td class="note">${j.state === "failed" ? esc(j.note || "") : ""}</td><td class="actions">${logBtn(j)}</td></tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">No finished jobs yet.</div>';
 }
 
+let last = null, actionErrorUntil = 0;
+const showError = (msg, forAction) => {
+  $("error").textContent = msg;
+  if (forAction) actionErrorUntil = Date.now() + 8000;
+};
+
 async function refresh() {
+  let s;
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
-    render(await r.json());
-    if ($("error").textContent === "can't reach the gpushift daemon") $("error").textContent = "";
-  } catch {
-    $("error").textContent = "can't reach the gpushift daemon";
+    s = await r.json();
+    if (!r.ok) throw new Error(s.error || `HTTP ${r.status}`);
+  } catch (e) {
+    showError(e instanceof TypeError ? "can't reach the gpushift daemon (gpushift start)" : `status failed: ${e.message}`);
+    return;
   }
+  if (Date.now() > actionErrorUntil) $("error").textContent = "";
+  last = s;
+  sample(s);
+  if (!drag) render(s);
 }
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "X-Gpushift": "1", "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).catch(() => null);
+  const res = r ? await r.json().catch(() => ({})) : { error: "can't reach the gpushift daemon" };
+  if (!res.ok) showError(res.error || "action failed", true);
+  refresh();
+}
+
+// Log viewer: follows the end of the log while it is open, unless you scroll up.
+let logId = null, logTimer = null;
+async function loadLog() {
+  if (logId == null) return;
+  const pre = $("logtext");
+  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+  try {
+    const r = await fetch(`/api/log/${logId}`, { cache: "no-store" });
+    const l = await r.json();
+    if (logId == null) return;
+    $("logpath").textContent = l.path;
+    $("logpath").title = l.path;
+    pre.textContent = (l.truncated ? "… (earlier output not shown)\n" : "") + (l.text || "(no output yet)");
+  } catch {
+    pre.textContent = "can't reach the gpushift daemon";
+  }
+  if (atEnd) pre.scrollTop = pre.scrollHeight;
+}
+function openLog(id) {
+  const j = last && [...last.running, ...last.queue, ...last.recent].find((x) => x.id === id);
+  $("logtitle").textContent = `Log of job ${id}${j && j.tag ? " · " + j.tag : ""}`;
+  $("logpath").textContent = "";
+  $("logtext").textContent = "loading…";
+  logId = id;
+  $("logbox").showModal();
+  loadLog().then(() => { $("logtext").scrollTop = $("logtext").scrollHeight; });
+  clearInterval(logTimer);
+  logTimer = setInterval(loadLog, 2000);
+}
+$("logbox").addEventListener("close", () => { logId = null; clearInterval(logTimer); });
+$("logclose").addEventListener("click", () => $("logbox").close());
 
 document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-act]");
-  if (b) post(`/api/${b.dataset.act}/${b.dataset.id}`);
+  if (!b) return;
+  const id = Number(b.dataset.id), act = b.dataset.act;
+  if (act === "log") return openLog(id);
+  if (act === "cancel" && armed !== id) {
+    armed = id;
+    clearTimeout(armTimer);
+    armTimer = setTimeout(() => { armed = null; if (last) render(last); }, 4000);
+    if (last) render(last);
+    return;
+  }
+  if (act === "cancel") { armed = null; clearTimeout(armTimer); }
+  post(`/api/${act}/${id}`);
 });
 $("free").addEventListener("click", () => {
   const b = $("free");
-  if (b.dataset.armed) { delete b.dataset.armed; b.textContent = "Free the GPUs"; post("/api/free"); return; }
-  b.dataset.armed = "1"; b.textContent = "Click again to free";
-  setTimeout(() => { if (b.dataset.armed) { delete b.dataset.armed; b.textContent = "Free the GPUs"; } }, 4000);
+  const disarm = () => { delete b.dataset.armed; b.textContent = "Free the GPUs"; b.classList.remove("armed"); };
+  if (b.dataset.armed) { disarm(); post("/api/free"); return; }
+  b.dataset.armed = "1"; b.textContent = "Click again to free"; b.classList.add("armed");
+  setTimeout(() => { if (b.dataset.armed) disarm(); }, 4000);
 });
 $("resume").addEventListener("click", () => post("/api/resume"));
+try { $("recentbox").open = localStorage.getItem("gpushift.recentOpen") === "1"; } catch {}
+$("recentbox").addEventListener("toggle", () => {
+  try { localStorage.setItem("gpushift.recentOpen", $("recentbox").open ? "1" : "0"); } catch {}
+});
+
+// Reordering the queue: drag a row by its handle, or focus the handle and press the arrow keys.
+let drag = null, gripDown = false, focusGrip = null;
+const rowOf = (el) => el && el.closest("#queue tr[data-id]");
+const clearDrop = () => document.querySelectorAll(".drop-before, .drop-after").forEach((r) => r.classList.remove("drop-before", "drop-after"));
+const moveTo = (id, before) => post(`/api/move/${id}`, { before });
+
+$("queue").addEventListener("pointerdown", (e) => { gripDown = !!e.target.closest(".grip"); });
+$("queue").addEventListener("dragstart", (e) => {
+  const tr = rowOf(e.target);
+  if (!gripDown || !tr) { e.preventDefault(); return; }
+  drag = Number(tr.dataset.id);
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", String(drag));
+  tr.classList.add("dragging");
+});
+$("queue").addEventListener("dragover", (e) => {
+  const tr = rowOf(e.target);
+  if (drag == null || !tr) return;
+  e.preventDefault();
+  const r = tr.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
+  clearDrop();
+  if (Number(tr.dataset.id) !== drag) tr.classList.add(above ? "drop-before" : "drop-after");
+});
+$("queue").addEventListener("drop", (e) => {
+  const tr = rowOf(e.target);
+  if (drag == null || !tr) return;
+  e.preventDefault();
+  const above = tr.classList.contains("drop-before"), below = tr.classList.contains("drop-after");
+  clearDrop();
+  if (!above && !below) return;
+  const ref = above ? tr : tr.nextElementSibling;
+  const before = ref ? Number(ref.dataset.id) : null;
+  const moving = document.querySelector(`#queue tr[data-id="${drag}"]`);
+  if (before === drag || (moving && moving.nextElementSibling === ref)) return; // dropped where it already is
+  tr.parentNode.insertBefore(moving, ref); // show it right away; the next refresh confirms
+  moveTo(drag, before);
+});
+$("queue").addEventListener("dragend", () => {
+  document.querySelectorAll("tr.dragging").forEach((r) => r.classList.remove("dragging"));
+  clearDrop();
+  drag = null;
+  gripDown = false;
+  if (last) render(last);
+});
+$("queue").addEventListener("keydown", (e) => {
+  const g = e.target.closest(".grip");
+  if (!g || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+  e.preventDefault();
+  const tr = rowOf(g), id = Number(g.dataset.grip);
+  if (e.key === "ArrowUp") {
+    const prev = tr.previousElementSibling;
+    if (!prev) return;
+    focusGrip = id;
+    moveTo(id, Number(prev.dataset.id));
+  } else {
+    const next = tr.nextElementSibling;
+    if (!next) return;
+    const after = next.nextElementSibling;
+    focusGrip = id;
+    moveTo(id, after ? Number(after.dataset.id) : null);
+  }
+});
+
+// Poll every 2 s while the tab is visible; catch up at once when it comes back.
 refresh();
-setInterval(refresh, 2000);
+setInterval(() => { if (!document.hidden) refresh(); }, 2000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </html>

@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     resume INTEGER NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0,
     frozen_at REAL,
+    paused_s REAL NOT NULL DEFAULT 0, -- seconds the current run spent frozen
+    after_ids TEXT,                   -- JSON list: jobs that must finish first (--after)
     evict_requested_at REAL,
     total_runtime REAL NOT NULL DEFAULT 0,
     note TEXT
@@ -61,7 +63,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 
 ACTIVE = ("running", "frozen", "evicting")
 FINAL = ("done", "failed", "cancelled")
-JSON_FIELDS = ("argv", "env", "gpus")
+JSON_FIELDS = ("argv", "env", "gpus", "after_ids")
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -83,6 +85,8 @@ ADDED_COLUMNS = [
     ("notified", "INTEGER NOT NULL DEFAULT 0"),
     ("vram_mb", "INTEGER"),
     ("peak_vram_mb", "INTEGER"),
+    ("paused_s", "REAL NOT NULL DEFAULT 0"),
+    ("after_ids", "TEXT"),
 ]
 
 

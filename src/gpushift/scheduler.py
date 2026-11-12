@@ -18,12 +18,24 @@ Starvation guard (in-order head with reservations)
   (when the running jobs it waits for are expected to end). Jobs without an
   estimate, or waiting on jobs without one, are simply held back.
 Without the guard, any job that fits may start, like task-spooler.
+
+Dependencies (--after)
+----------------------
+A job that waits for other jobs to finish is not considered at all until they
+have: it neither starts nor holds anything back. The forecast lets it in once
+the jobs it waits for are expected to end.
+
+Reordering (reorder)
+--------------------
+Before jobs start, a job that fits now may be moved to the front with the next
+jobs of the same size, if the forecast says that cuts the total waiting and no
+job starts much later than in queue order (see reorder()).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 PRESETS = ("light", "one", "two", "exclusive", "cpu")
 
@@ -249,6 +261,12 @@ def simulate(
     running: list[tuple[Req, list[int], float | None]],
     machine: Machine,
     guard: bool = True,
+    *,
+    slack: float = 0.0,
+    pinned: set[int] | frozenset[int] = frozenset(),
+    limits: dict[int, float] | None = None,
+    after: dict[int, set[int]] | None = None,
+    out: dict[int, tuple[float, list[int], float | None]] | None = None,
 ) -> dict[int, float | None]:
     """Estimated start offset (seconds from now) for each queued job.
 
@@ -256,33 +274,63 @@ def simulate(
     running: (req, gpus, expected remaining seconds or None)
     None means unknown (a job ahead of it has no runtime estimate).
     machine.mem_ok (GPUs busy outside gpushift) only applies to "now"; later
-    rounds optimistically assume that external usage is gone."""
+    rounds optimistically assume that external usage is gone.
+    slack > 0: at every point where jobs start, apply reorder() as the daemon
+    would (with ``pinned`` and promised ``limits``).
+    after:   job id -> ids of queued/running jobs it waits for (--after).
+    out:     if given, filled with job id -> (start, gpus, end or None)."""
     m = Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity)
     first = True
     t = 0.0
     act = [(r, g, (rem if rem is not None else math.inf)) for r, g, rem in running]
     pending = list(queued)
+    promised = dict(limits or {})
+    after = after or {}
+    finished: set[int] = set()
     est: dict[int, float | None] = {r.id: None for r, _ in queued}
     # Each round either finishes or starts at least one job, so this bound holds.
     for _ in range(2 * (len(pending) + len(act)) + 2):
         if not pending:
             break
+        mach = machine if first else m
+        now_running = [(r, g, None if e == math.inf else e - t) for r, g, e in act]
+        waiting = {i: deps - finished for i, deps in after.items() if deps - finished}
+        res = None
+        if slack > 0:
+            res = reorder(
+                pending,
+                now_running,
+                mach,
+                guard,
+                slack=slack,
+                pinned=pinned,
+                limits={k: v - t for k, v in promised.items()},
+                after=waiting,
+            )
+            pos = {i: n for n, i in enumerate(res.order)}
+            pending.sort(key=lambda q: pos[q[0].id])
+        ready = [(r, d) for r, d in pending if r.id not in waiting]
         starts = dict(
             plan(
-                [r for r, _ in pending],
+                [r for r, _ in ready],
                 [(r, g) for r, g, _ in act],
-                machine if first else m,
+                mach,
                 guard,
-                durations={r.id: d for r, d in pending},
-                remaining={r.id: (None if e == math.inf else e - t) for r, _, e in act},
+                durations={r.id: d for r, d in ready},
+                remaining={r.id: rem for r, _, rem in now_running},
             )
         )
+        if res is not None and any(i in starts for i in res.moved):
+            for i, off in res.limits.items():
+                promised[i] = min(promised.get(i, math.inf), t + off)
         first = False
         still = []
         for r, dur in pending:
             if r.id in starts:
                 est[r.id] = t
                 act.append((r, starts[r.id], t + dur if dur is not None else math.inf))
+                if out is not None:
+                    out[r.id] = (t, starts[r.id], t + dur if dur is not None else None)
             else:
                 still.append((r, dur))
         pending = still
@@ -292,5 +340,95 @@ def simulate(
         if not finite:
             break
         t = min(finite)
+        finished.update(r.id for r, _, e in act if e <= t)
         act = [a for a in act if a[2] > t]
     return est
+
+
+REORDER_WINDOW = 10  # how far down the queue to look for jobs to run first
+REORDER_MIN_GAIN = 60.0  # seconds of total waiting a reorder must save
+
+
+@dataclass
+class Reorder:
+    order: list[int]  # job ids in the order to plan with
+    est: dict[int, float | None]  # estimated start offsets in that order
+    moved: list[int] = field(default_factory=list)  # jobs moved to the front
+    passed: list[int] = field(default_factory=list)  # jobs they run ahead of
+    gain: float = 0.0  # seconds of waiting saved, summed over all jobs
+    limits: dict[int, float] = field(default_factory=dict)  # latest start (offset) each job was promised
+
+
+def _shape(r: Req) -> tuple:
+    return (r.n_gpus, r.slots, r.exclusive, r.shared, r.vram)
+
+
+def reorder(
+    queued: list[tuple[Req, float | None]],
+    running: list[tuple[Req, list[int], float | None]],
+    machine: Machine,
+    guard: bool = True,
+    *,
+    slack: float = 3600.0,
+    pinned: set[int] | frozenset[int] = frozenset(),
+    limits: dict[int, float] | None = None,
+    after: dict[int, set[int]] | None = None,
+) -> Reorder:
+    """Run jobs ahead of their turn when that makes everyone wait less overall.
+
+    Candidates: a job (with an estimate) that could start right now but the
+    queue order holds back, moved to the front together with the next 0, 1, 2,
+    ... jobs of the same size behind it (so a batch of short whole-machine
+    jobs can go before one long job). The candidate with the least total
+    waiting wins, provided no job starts later than its queue-order start plus
+    max(slack, half its own run time) (``pinned`` jobs: not later at all), nor
+    later than an earlier promise in ``limits`` (offsets from now). Repeated
+    reorders therefore cannot push a job back again and again. Jobs still
+    waiting for others (``after``) are never moved."""
+    after = after or {}
+    base = simulate(queued, running, machine, guard, after=after)
+    ids = [r.id for r, _ in queued]
+    best = Reorder(ids, base)
+    if slack <= 0 or len(queued) < 2:
+        return best
+    limits = limits or {}
+    known = [i for i in ids if base[i] is not None]
+    dur = {r.id: d for r, d in queued}
+
+    def limit(i: int) -> float:
+        b = base[i]
+        allow = 0.0 if i in pinned else max(slack, 0.5 * (dur[i] or 0.0))
+        return max(b, min(b + allow, limits.get(i, math.inf)))
+
+    lim = {i: limit(i) for i in known}
+    total_base = sum(base[i] for i in known)
+
+    now = Usage(machine)
+    for r, g, _ in running:
+        now.add(r, g)
+    # A job never passes an earlier job of the same size: equal jobs keep
+    # their order (a session's runs stay in the order it submitted them).
+    seen: set[tuple] = {_shape(queued[0][0])}
+    for k in range(1, min(len(queued), REORDER_WINDOW)):
+        req, d = queued[k]
+        if _shape(req) in seen:
+            continue
+        seen.add(_shape(req))
+        if d is None or base[req.id] == 0.0 or req.id in after or now.fit(req) is None:
+            continue
+        group = [
+            j
+            for j in range(k, len(queued))
+            if _shape(queued[j][0]) == _shape(req) and dur[queued[j][0].id] is not None and queued[j][0].id not in after
+        ]
+        for n in range(1, len(group) + 1):
+            front = set(group[:n])
+            cand = [queued[j] for j in group[:n]] + [q for j, q in enumerate(queued) if j not in front]
+            est = simulate(cand, running, machine, guard, after=after)
+            if any(est[i] is None or est[i] > lim[i] + 1e-6 for i in known):
+                break  # moving more of them only pushes the others back further
+            gain = total_base - sum(est[i] for i in known)
+            if gain >= REORDER_MIN_GAIN and gain > best.gain:
+                moved = [queued[j][0].id for j in group[:n]]
+                best = Reorder([r.id for r, _ in cand], est, moved, ids[:k], gain, lim)
+    return best

@@ -57,8 +57,9 @@ class Config:
     shared_gpu: int | None  # GPU that --light jobs share
     gpu_free_perc: int = 75  # an unclaimed GPU counts as free if this % of its memory is free
     starvation_guard: bool = True
-    fair_share: bool = True  # sessions take turns instead of strict submit order
+    fair_share: bool = False  # sessions take turns instead of first come, first served
     packing: bool = True  # jobs with a known GPU memory need may share a GPU
+    reorder_slack: int = 3600  # seconds a job may be passed to cut total waiting; 0 = off
     free_mode_default: str = "full"  # full | soft
     evict_timeout: int = 300  # seconds a resumable job gets to checkpoint before it is frozen
     notify_desktop: str = "failures"  # all | failures | off
@@ -93,7 +94,11 @@ def read_raw() -> dict:
 def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
     raw = read_raw()
     if detected is None:
-        detected = gpus_mod.detect()
+        # The daemon's latest reading when there is one: running nvidia-smi
+        # takes ~0.1 s, too slow for every status call and dashboard refresh.
+        from .control import gpu_readings
+
+        detected = gpu_readings()
     all_idx = [g.index for g in detected]
 
     vis = raw.get("gpus")
@@ -125,6 +130,10 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
     evict_timeout = raw.get("evict_timeout", 300)
     if not isinstance(evict_timeout, int) or evict_timeout < 1:
         raise ConfigError("evict_timeout must be a positive number of seconds")
+
+    reorder_slack = raw.get("reorder_slack", 3600)
+    if not isinstance(reorder_slack, int) or reorder_slack < 0:
+        raise ConfigError("reorder_slack must be a whole number of seconds >= 0 (0 turns reordering off)")
 
     h = raw.get("hook", {}) or {}
     hook = HookConfig(
@@ -162,8 +171,9 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
         shared_gpu=shared,
         gpu_free_perc=perc,
         starvation_guard=bool(raw.get("starvation_guard", True)),
-        fair_share=bool(raw.get("fair_share", True)),
+        fair_share=bool(raw.get("fair_share", False)),
         packing=bool(raw.get("packing", True)),
+        reorder_slack=reorder_slack,
         free_mode_default=mode,
         evict_timeout=evict_timeout,
         notify_desktop=notify_desktop,
@@ -216,13 +226,19 @@ def template(detected: list[gpus_mod.GPU]) -> str:
 # before it is frozen instead.
 # evict_timeout = 300
 
-# true: Claude sessions (and you) take turns, so one session's long list of
-# jobs can't hold everyone else up. false: strict submit order.
-# fair_share = true
+# false: first come, first served. true: Claude sessions (and you) take turns,
+# so one session's long list of jobs can't hold everyone else up.
+# fair_share = false
 
 # true: a job whose GPU memory need is known (--vram, or learned from earlier
 # runs of the same command) may share a GPU with other such jobs if they fit.
 # packing = true
+
+# A job may run ahead of its turn when that cuts the total waiting, e.g. a
+# short whole-machine job before a long one-GPU job. No job is pushed back by
+# more than this many seconds or half its own run time, whichever is larger;
+# jobs moved up with --priority are never pushed back. 0 turns this off.
+# reorder_slack = 3600
 
 # Port of the web dashboard (`gpushift ui`), on 127.0.0.1 only. 0 turns it off.
 # ui_port = 8237

@@ -130,6 +130,8 @@ def run(job_id: int) -> int:
         ended = time.time()
         with db.tx(con):
             cur = db.get_job(con, job_id)
+            active = cur["state"] in db.ACTIVE
+            this_run = control.ran(cur, ended) - cur["total_runtime"] if active else ended - started
             if cur["state"] not in db.ACTIVE or cur["runner_pid"] != os.getpid():
                 outcome = cur["state"]
             elif cur["cancel_requested"]:
@@ -140,7 +142,7 @@ def run(job_id: int) -> int:
                     state="cancelled",
                     exit_code=rc,
                     ended_at=ended,
-                    total_runtime=cur["total_runtime"] + ended - started,
+                    total_runtime=control.ran(cur, ended),
                     note="cancelled",
                 )
             elif cur["state"] == "evicting":
@@ -160,11 +162,11 @@ def run(job_id: int) -> int:
                     state=outcome,
                     exit_code=rc,
                     ended_at=ended,
-                    total_runtime=cur["total_runtime"] + ended - started,
-                    note=None if rc == 0 else failure_note(log, rc, ended - started),
+                    total_runtime=control.ran(cur, ended),
+                    note=None if rc == 0 else failure_note(log, rc, this_run),
                 )
         control.clear_stop(job_id)
-        out.write(f"=== gpushift: job {job_id} {outcome} (exit code {rc}) after {ended - started:.0f}s\n".encode())
+        out.write(f"=== gpushift: job {job_id} {outcome} (exit code {rc}) after {this_run:.0f}s\n".encode())
     return 0
 
 

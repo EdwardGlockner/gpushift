@@ -43,7 +43,12 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
    it back at the front instead of freezing it on the GPU.
 9. **Give an `--eta` when you can.** Besides better start estimates, a job with an
    estimate may run on a GPU that would otherwise sit idle while a bigger job waits.
-10. **Give `--vram` when you know the memory need** (e.g. `--vram 5G` for a small
+10. **Chain dependent jobs with `--after`** instead of waiting and polling: submit
+    the training run, then `gpushift submit --light --after <train id> -- python eval.py`.
+    The eval starts once training has finished successfully, and is cancelled if
+    training fails (so check why before resubmitting). Submitting jobs one after
+    another does not make them run in that order: they may run side by side.
+11. **Give `--vram` when you know the memory need** (e.g. `--vram 5G` for a small
     fine-tune measured before). Jobs with a known need can share a GPU instead of
     waiting for a whole one. gpushift also learns it from earlier runs of the same
     command, so don't guess wildly: an underestimate can make a job run out of memory.
@@ -67,6 +72,7 @@ gpushift submit --two --eta 3h --tag llama-sft -- torchrun --nproc_per_node 2 sf
 gpushift submit --light -- python eval.py --ckpt runs/a/last.pt
 gpushift submit --cpu -- python scripts/tokenize.py
 gpushift submit --one -- "python train.py && python eval.py"   # one shell string = one job
+gpushift submit --light --after 12 -- python eval.py --ckpt runs/a/last.pt   # once job 12 succeeded
 ```
 
 Give the command either as separate words (`-- python run.py a 1`) or as one
@@ -114,8 +120,10 @@ because they're using the GPU themselves (`auto_free` then names the program).
 Your job will wait and continue afterwards; don't try to work around it. If
 `daemon.running` is false, tell the user (they can run `gpushift start`).
 
-Jobs from different sessions take turns: the queue order in `status` is the order
-they will start in, and it can change as sessions use GPU time.
+Jobs run first come, first served, but a short job may run before a long one
+when that cuts everyone's waiting (within limits). The queue order in `status` is
+the order jobs are expected to start in, and it can change as jobs come and go. A
+good `--eta` helps: jobs without an estimate are never moved ahead.
 
 ## Making a training script resumable
 

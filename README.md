@@ -7,15 +7,16 @@
 
 Share one GPU machine between your Claude Code agents and yourself. Agents queue
 their GPU work instead of launching it, so they never crash each other's runs;
-jobs take turns, share a GPU when they fit, and step aside when you start a game
+jobs run in the order they were queued, share a GPU when they fit, and step aside when you start a game
 or Blender, then carry on when you're done.
 
 - **One queue for every session.** A Claude Code hook stops agents that launch
   training directly and tells them how to queue it.
 - **The machine is still yours.** `/gpushift:free` (or just starting a heavy GPU
   program) makes running jobs save a checkpoint and step aside; they resume later.
-- **Fair and efficient.** Sessions take turns, small jobs fill idle GPUs, and jobs
-  whose memory use is known share a GPU.
+- **Efficient.** First come, first served, but short jobs fill idle GPUs or go
+  ahead of long ones when that cuts everyone's waiting, and jobs whose memory use
+  is known share a GPU.
 - **You stay informed.** Agents are told when their jobs end, you get desktop
   notifications for failures, and a web dashboard shows everything.
 - Windows, Linux and macOS, any number of NVIDIA GPUs (or none). No configuration.
@@ -80,6 +81,11 @@ Options:
   idle GPUs (below). Without it, gpushift learns from earlier runs of the same command.
 - `--vram 6G`: GPU memory it needs, so it can share a GPU. Also learned from earlier runs.
 - `--restartable`: safe to stop and run again (it skips finished work); see free mode.
+- `--after 12` (or `--after 12,13`): start only once those jobs finished successfully,
+  e.g. an eval after its training run. Until then it doesn't hold anything else up; if
+  one of them fails or is cancelled, this job is cancelled too. Use it whenever order
+  matters: queue order alone doesn't make jobs run one after another (two jobs can run
+  side by side on two GPUs). A job can't be moved ahead of a job it waits for.
 - `--priority` (front of the queue), `--tag`, `--gpus N` / `--slots N` (override the preset).
 
 The job runs with the **cwd and environment of the submit call** (your venv/conda
@@ -92,11 +98,11 @@ missing program or script is rejected right away, not when the job starts.
 
 ## How jobs are scheduled
 
-**Taking turns.** Each Claude session (and you, from a terminal) is a participant.
-The next job comes from whoever has used the least GPU time in the last 24 hours,
-so one session's list of thirteen jobs doesn't hold up everyone else for hours.
-Jobs moved up with `--priority` / `gpushift priority`, and evicted jobs waiting to
-resume, go first. `fair_share = false` restores plain submit order.
+**First come, first served.** Jobs start in the order they were queued. Jobs moved
+up with `--priority` / `gpushift priority`, and evicted jobs waiting to resume, go
+first. With `fair_share = true`, Claude sessions (and you, from a terminal) take
+turns instead: the next job comes from whoever has used the least GPU time in the
+last 24 hours, so one session's list of thirteen jobs doesn't hold up everyone else.
 
 **Sharing GPUs.** A job whose memory need is known (`--vram`, or the peak of earlier
 successful runs of the same command plus 15%) can share a GPU with other such jobs,
@@ -109,6 +115,15 @@ a stream of small ones: it holds back the jobs behind it. They may still use a G
 that would otherwise sit idle, if their estimate says they finish before the
 waiting job could start anyway. When a running job is past its estimate, nobody
 knows when it ends, so then nothing jumps ahead.
+
+**Short jobs before long ones, within limits.** Strict order can leave a GPU idle
+for hours: a 4-hour one-GPU job starts, and a batch of 15-minute whole-machine jobs
+queued after it waits for it. Before starting anything, gpushift
+forecasts the queue and checks whether running some jobs ahead of their turn cuts
+the total waiting. It does that only if no job starts more than an hour (or half its
+own run time, if that is longer) later than it would in queue order, counted from
+the first time it was passed, and never for jobs moved up with `--priority`. Equal
+jobs keep their order. `reorder_slack` sets the hour; 0 turns this off.
 
 **Slots** are the machine's concurrency budget (default: 2 per GPU). `--light`,
 `--cpu` and GPU-sharing jobs use 1, `--one` and `--two` use 2, `--exclusive` all.
@@ -151,9 +166,10 @@ and if you resume by hand, gpushift waits for the program to close before freein
 - **Desktop notifications** for failed jobs and automatic free/resume
   (`[notify] desktop = "all"` for every job, `"off"` for none).
 - **`gpushift ui`** opens a live dashboard at `http://127.0.0.1:8237`: GPUs and their
-  memory, running jobs, the queue in turn order, recent results with failure reasons,
-  and buttons to free/resume, cancel, move a job to the front or run it again. It only
-  listens on your own machine.
+  memory, load, temperature and power, the CPU, free space on each drive, a timeline
+  of what runs on which GPU and when, running jobs and their logs, the queue (drag a
+  job by its handle to move it), recent results with failure reasons, and buttons to
+  free/resume or cancel. It only listens on your own machine.
 
 ## Commands
 
@@ -243,8 +259,9 @@ slots = 4                   # default: 2 per GPU (CPU-only: half the cores)
 shared_gpu = 1              # GPU for --light jobs (default: the last GPU)
 gpu_free_perc = 75          # an unclaimed GPU is free if this % of its memory is free
 starvation_guard = true
-fair_share = true           # sessions take turns
+fair_share = false          # true: sessions take turns
 packing = true              # jobs with a known memory need may share a GPU
+reorder_slack = 3600        # seconds a job may be passed to cut total waiting (0 = off)
 free_mode_default = "full"  # or "soft"
 evict_timeout = 300         # seconds a resumable job gets to checkpoint during `free`
 ui_port = 8237              # dashboard on 127.0.0.1 (0 = off)

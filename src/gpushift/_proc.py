@@ -110,6 +110,19 @@ def resume_tree(pid: int | None, ctime: float | None = None) -> bool:
     return True
 
 
+def kill(pid: int | None, ctime: float | None = None, timeout: float = 5.0) -> bool:
+    """Kill this one process, leaving its children running."""
+    p = get_proc(pid, ctime)
+    if p is None:
+        return False
+    try:
+        p.kill()
+        p.wait(timeout)
+    except (psutil.Error, psutil.TimeoutExpired):
+        pass
+    return True
+
+
 def kill_tree(pid: int | None, ctime: float | None = None, timeout: float = 5.0) -> bool:
     p = get_proc(pid, ctime)
     if p is None:
