@@ -8,7 +8,7 @@
     {
       "name": "gpushift",
       "source": "./plugin",
-      "description": "Agents queue GPU work instead of launching it; jobs take turns and step aside when you need the GPUs."
+      "description": "Agents queue GPU work instead of launching it; jobs step aside when you need the GPUs."
     }
   ]
 }

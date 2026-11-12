@@ -6,7 +6,7 @@ GET  /api/status    `gpushift status --json` plus per-job GPU memory
 GET  /api/log/<id>  the end of a job's log
 POST /api/free      {"soft": bool}
 POST /api/resume
-POST /api/cancel/<id>, /api/priority/<id>
+POST /api/cancel/<id>
 POST /api/move/<id>  {"before": <id> | null}  (null: to the end)
 
 POSTs must carry the header ``X-Gpushift: 1``; browsers can't add it to requests
@@ -82,14 +82,10 @@ def _act(path: str, body: dict) -> dict:
         before = body.get("before")
         msg = control.move(con, int(m.group(1)), None if before is None else int(before))
         return {"ok": "moved" in msg, "message": msg, "error": msg}
-    m = re.fullmatch(r"/api/(cancel|priority)/(\d+)", path)
+    m = re.fullmatch(r"/api/cancel/(\d+)", path)
     if not m:
         return {"ok": False, "error": "unknown action"}
-    action, jid = m.group(1), int(m.group(2))
-    if action == "cancel":
-        return {"ok": True, "message": control.cancel(con, jid)}
-    msg = control.to_front(con, jid)
-    return {"ok": "moved" in msg, "message": msg, "error": msg}
+    return {"ok": True, "message": control.cancel(con, int(m.group(1)))}
 
 
 class Handler(BaseHTTPRequestHandler):

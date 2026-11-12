@@ -38,12 +38,12 @@ button.small { padding: 1px 8px; font-size: 12px; }
 .cpu-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
 .cpu-cols > div { display: grid; gap: 12px; align-content: start; }
 @media (max-width: 900px) { .system, .cpu-cols { grid-template-columns: minmax(0, 1fr); } }
-.drives { display: grid; gap: 10px; }
+.drives { display: grid; gap: 10px; align-content: start; }
 .drive { display: grid; grid-template-columns: 2.6em minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
 .drive .mount { font-weight: 600; font-variant-numeric: tabular-nums; }
 .drive .free { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
 .card .foot { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; font-variant-numeric: tabular-nums; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 12px; min-width: 0; align-content: start; }
 .card .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
 .stat { display: grid; gap: 3px; min-width: 0; }
@@ -88,7 +88,7 @@ details.fold[open] > summary::before { transform: rotate(90deg); }
 details.fold[open] > summary { margin-bottom: 8px; }
 .cmd { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { font-size: 11.5px; font-weight: 600; padding: 0 6px; border-radius: 4px; border: 1px solid; }
-.badge.frozen { color: var(--frozen); } .badge.evicting { color: var(--warn); } .badge.over { color: var(--warn); }
+.badge.frozen { color: var(--frozen); } .badge.evicting { color: var(--warn); }
 .badge.failed { color: var(--bad); } .badge.done { color: var(--good); } .badge.cancelled { color: var(--muted); }
 .badge.span { color: var(--muted); font-weight: 400; }
 .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
