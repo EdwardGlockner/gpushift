@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1 (2026-11-12)
 
 - Agents are now woken when their jobs end, even if they were idle: `gpushift wait`
   without a job id waits for the next of the session's own jobs, and the skill tells
