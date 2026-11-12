@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-12)
 
 - Removed automatic free mode (freeing the GPUs while you run a game or other
   heavy GPU program). Free and resume by hand with `gpushift free` / `resume`.
