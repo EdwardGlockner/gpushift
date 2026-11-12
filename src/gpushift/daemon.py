@@ -139,7 +139,7 @@ class Daemon:
         self.last_gpu_poll = 0.0
         self.procs: dict[int, int] | None = None  # pid -> GPU MiB, from the last poll
         self.capacity: dict[int, int] | None = None  # MiB per GPU packed jobs may book
-        self.cpu = cpustat.Sampler()
+        self.cpu: cpustat.Sampler | None = None  # made when a dashboard first asks (slow to set up on Windows)
         self.snap: _proc.Snapshot | None = None  # process tree, taken once per poll
         self.job_pids: dict[int, set[int]] = {}  # job id -> its processes (runner and job), per poll
 
@@ -206,6 +206,8 @@ class Daemon:
         for jid, pids in self.job_pids.items():
             job_of.update(dict.fromkeys(pids, jid))
         try:
+            if self.cpu is None:
+                self.cpu = cpustat.Sampler()
             db.set_kv(self.con, "cpu_state", self.cpu.sample(job_of))
         except Exception:  # a dashboard reading must never stop the scheduler
             log.exception("cpu reading failed")
