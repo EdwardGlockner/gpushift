@@ -1,7 +1,7 @@
 {
   "name": "gpushift",
-  "version": "0.1.0",
-  "description": "Share a GPU machine between Claude Code agents and you: a skill that teaches agents to queue GPU work with gpushift, a hook that redirects direct GPU launches to the queue, a hook that tells sessions when their jobs end, and /gpushift:queue, :priority, :cancel, :free and :resume. Requires the gpushift CLI: uv tool install gpushift && gpushift init",
+  "version": "0.1.1",
+  "description": "Share a GPU machine between Claude Code agents and you: a skill that teaches agents to queue GPU work with gpushift, a hook that redirects direct GPU launches to the queue, wake-ups when a session's jobs end, and /gpushift:queue, :priority, :cancel, :free and :resume. Requires the gpushift CLI: uv tool install gpushift && gpushift init",
   "author": {
     "name": "Edward Glockner"
   },

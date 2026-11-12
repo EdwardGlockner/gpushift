@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+- Agents are now woken when their jobs end, even if they were idle: `gpushift wait`
+  without a job id waits for the next of the session's own jobs, and the skill tells
+  agents to run it in the background after submitting.
+- The dashboard is shown in the README, which is now much shorter.
+
 ## 0.1.0 (2026-11-12)
 
 First release.

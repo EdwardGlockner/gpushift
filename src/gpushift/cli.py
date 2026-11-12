@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, autostart, config, control, daemon, db, gpus, paths
+from . import __version__, autostart, config, control, daemon, db, gpus, notify, paths
 from ._proc import NO_WINDOW
 from .scheduler import PRESETS, PresetError, preset_requirements
 
@@ -328,6 +328,8 @@ def cmd_submit(a) -> int:
     if mode != "normal":
         print("note: the queue is paused (free mode); it will start after `gpushift resume`")
     print(f"logs: gpushift logs {jid} -f")
+    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        print("to be woken when it ends, run `gpushift wait` as a background command (one is enough for all your jobs)")
     return 0
 
 
@@ -633,6 +635,8 @@ def cmd_logs(a) -> int:
 
 
 def cmd_wait(a) -> int:
+    if a.id is None:
+        return wait_for_mine(a)
     con = db.connect()
     get_job_or_fail(con, a.id)
     deadline = None if a.timeout is None else time.time() + parse_duration(a.timeout)
@@ -653,6 +657,48 @@ def cmd_wait(a) -> int:
             print(f"job {a.id} still {db.get_job(con, a.id)['state']} (timed out waiting)")
             return 124
         time.sleep(1)
+
+
+def wait_for_mine(a) -> int:
+    """`gpushift wait` without a job id: wait until the next job this Claude
+    session (or, outside Claude Code, this terminal user) submitted ends, and
+    say how it went. Run in the background, it wakes an idle agent up."""
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    con = db.connect()
+    deadline = None if a.timeout is None else time.time() + parse_duration(a.timeout)
+
+    def open_jobs() -> int:
+        return con.execute(
+            "SELECT COUNT(*) FROM jobs WHERE session IS ? AND state IN ('queued','running','frozen','evicting')",
+            (session,),
+        ).fetchone()[0]
+
+    while True:
+        with db.tx(con):
+            rows = con.execute(
+                "SELECT * FROM jobs WHERE session IS ? AND notified=0 AND state IN ('done','failed','cancelled') "
+                "ORDER BY id",
+                (session,),
+            ).fetchall()
+            ended = [db.decode(r) for r in rows]
+            for j in ended:
+                db.update(con, j["id"], notified=1)
+        if ended:
+            print(notify.for_agent(ended))
+            left = open_jobs()
+            if left:
+                print(
+                    f"{left} more of your jobs {'are' if left != 1 else 'is'} queued or running: run `gpushift wait` "
+                    "in the background again to hear when the next one ends."
+                )
+            return 0
+        if not open_jobs():
+            print("none of your jobs are queued or running")
+            return 0
+        if deadline and time.time() > deadline:
+            print("timed out; your jobs are still queued or running")
+            return 124
+        time.sleep(2)
 
 
 def _vram_summary(cfg) -> str:
@@ -1023,8 +1069,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-n", "--tail", type=int, help="only the last N lines")
     s.set_defaults(func=cmd_logs)
 
-    s = sub.add_parser("wait", help="block until a job ends; exit code mirrors the job")
-    s.add_argument("id", type=int)
+    s = sub.add_parser(
+        "wait",
+        help="block until a job ends (exit code mirrors the job); without an id, until the next of your own jobs ends",
+    )
+    s.add_argument("id", type=int, nargs="?")
     s.add_argument("--timeout", help="give up after this long (e.g. 30m)")
     s.set_defaults(func=cmd_wait)
 

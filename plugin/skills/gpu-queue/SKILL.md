@@ -31,11 +31,12 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
    to pause, free or stop the GPUs, show them `gpushift status` and tell them to run
    `/gpushift:free` (`/gpushift:free --soft` only freezes) and later `/gpushift:resume`. Don't go hunting
    through `nvidia-smi` or other tools.
-7. **Don't block on the job, and don't poll.** After submitting, carry on with other
-   work (code, docs, analysis). When your job ends, a note saying so (with the
-   failure reason, if it failed) appears in your context after your next step; then
-   read `gpushift logs <id>`. Use `gpushift wait <id>` only when you have nothing
-   else to do until it finishes.
+7. **Let gpushift wake you; don't block or poll.** Right after submitting, run
+   `gpushift wait` as a *background* command (`run_in_background`). It exits when the
+   next of your jobs ends and says how it went, which wakes you up even if you were
+   idle. Then read `gpushift logs <id>`, act on the result, and start `gpushift wait`
+   in the background again if more of your jobs are queued or running. One such wait
+   is enough for all your jobs. Meanwhile, carry on with other work.
 8. **Make new training scripts resumable** with `gpushift.checkpoint` (below), so the
    user can free the GPUs without losing progress. If a job is safe to stop and run
    again from the start (an eval that skips tasks it already finished, a benchmark,

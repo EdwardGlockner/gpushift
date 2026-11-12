@@ -173,6 +173,22 @@ def test_after_waits_for_a_job_and_is_cancelled_when_it_fails(q):
     assert r.returncode != 0 and "no job 9999" in r.stderr
 
 
+def test_wait_without_an_id_reports_the_next_of_my_jobs(q):
+    q.env["CLAUDE_CODE_SESSION_ID"] = "session-a"
+    quick = q.submit("--cpu", "--", PY, "-c", "print('hi')")
+    slow = q.submit("--one", *ticker())
+    out = q.gpushift("wait").stdout
+    assert f"job {quick}" in out and "1 more of your jobs is queued or running" in out
+    assert q.job(quick)["notified"] == 1
+    q.gpushift("cancel", str(slow))
+    out = q.gpushift("wait").stdout
+    assert f"job {slow}" in out and "cancelled" in out and "more of your" not in out
+    assert "none of your jobs" in q.gpushift("wait").stdout
+    # Another session's jobs are not mine.
+    q.env["CLAUDE_CODE_SESSION_ID"] = "session-b"
+    assert "none of your jobs" in q.gpushift("wait").stdout
+
+
 def test_time_frozen_is_not_run_time(q):
     import json
 

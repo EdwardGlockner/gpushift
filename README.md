@@ -105,7 +105,8 @@ after that program closes.
 - **A hook** that blocks direct GPU launches (`python train.py`, `torchrun`,
   `accelerate launch`, ...) and shows the agent how to queue them instead. Add
   `# no-queue` to a command to let it through.
-- **A hook** that tells a session when its jobs have ended.
+- **Wake-ups**: agents run `gpushift wait` in the background, so a session hears
+  when its jobs end, even if it was idle.
 - **Commands**: `/gpushift:queue`, `/gpushift:priority`, `/gpushift:cancel`,
   `/gpushift:free` and `/gpushift:resume`.
 
@@ -143,6 +144,7 @@ and [Lightning](examples/lightning_resumable.py).
 | `gpushift submit [preset] -- <cmd>` | Queue a job |
 | `gpushift status` / `gpushift ui` | See what's running and waiting |
 | `gpushift logs <id> -f` | Follow a job's output |
+| `gpushift wait [<id>]` | Wait for a job (or the next of your jobs) to end |
 | `gpushift cancel <id>` / `gpushift retry <id>` | Cancel a job / run it again |
 | `gpushift priority <id>` | Move a job to the front |
 | `gpushift free` / `gpushift resume` | Free the GPUs / carry on |
