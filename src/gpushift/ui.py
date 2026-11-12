@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import socket
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -150,7 +151,10 @@ class Server(ThreadingHTTPServer):
     def server_bind(self):
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # Not HTTPServer.server_bind: it looks up the host's name, which can
+        # hang for many seconds on macOS (and the daemon waits for this).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def serve(port: int) -> ThreadingHTTPServer | None:

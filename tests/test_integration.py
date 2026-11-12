@@ -81,7 +81,7 @@ def test_free_full_evicts_resumable_and_freezes_rest(q, tmp_path):
     for j in (res, plain):
         q.wait_state(j, "running")
     q.wait_for(lambda: q.job(res)["pid"] and q.job(plain)["pid"], what="pids")
-    time.sleep(1.0)  # let the counter call should_stop() at least once (marks it resumable)
+    q.wait_resumable(res)
 
     out = q.gpushift("free").stdout
     assert "checkpointed and exited" in out
@@ -108,7 +108,7 @@ def test_free_full_evicts_resumable_and_freezes_rest(q, tmp_path):
 
 def test_free_soft_then_upgrade_to_full(q, tmp_path):
     res = q.submit("--one", "--resumable", *counter(tmp_path / "c", 300))
-    q.wait_for(lambda: q.job(res)["pid"], what="pid")
+    q.wait_resumable(res)
     q.gpushift("free", "--soft")
     assert q.state(res) == "frozen"
     q.gpushift("free")  # upgrade: wakes it up so it can checkpoint
@@ -154,7 +154,7 @@ def test_after_waits_for_a_job_and_is_cancelled_when_it_fails(q):
 
     train = q.submit("--one", "--", PY, "-c", "import time; time.sleep(3); print('trained')")
     ev = q.submit("--light", "--after", str(train), "--", PY, "-c", "print('evaluated')")
-    doomed = q.submit("--cpu", "--", PY, "-c", "raise SystemExit(1)")
+    doomed = q.submit("--cpu", "--", PY, "-c", "import time; time.sleep(2); raise SystemExit(1)")
     never = q.submit("--cpu", "--after", f"{train},{doomed}", "--", PY, "-c", "print('never')")
     q.wait_state(train, "running")
     s = json.loads(q.gpushift("status", "--json").stdout)
@@ -192,8 +192,10 @@ def test_time_frozen_is_not_run_time(q):
 
 def test_eviction_timeout_falls_back_to_freeze(q):
     q.write_config("evict_timeout = 1\n")
-    # claims to be resumable but never checks for the stop request
-    jid = q.submit("--one", "--resumable", *ticker())
+    # claims to be resumable but never checks for the stop request (and ignores SIGTERM)
+    stubborn = "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('ready' + '-now', flush=True)\nwhile True: time.sleep(0.05)"
+    jid = q.submit("--one", "--resumable", "--", PY, "-c", stubborn)
+    q.wait_for(lambda: "ready-now" in q.log(jid), what="job started")
     q.wait_for(lambda: q.job(jid)["pid"], what="pid")
     out = q.gpushift("free").stdout
     assert "frozen instead" in out

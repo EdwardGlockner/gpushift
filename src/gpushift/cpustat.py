@@ -40,7 +40,7 @@ class Sampler:
             if pid in job_of:
                 name = f"job {job_of[pid]}"
             load[name] = load.get(name, 0.0) + pct
-        top = sorted(load.items(), key=lambda kv: -kv[1])[:TOP]
+        top = sorted(((k, v) for k, v in load.items() if v >= 0.05), key=lambda kv: -kv[1])[:TOP]
         return {
             "at": time.time(),
             "load_pct": round(sum(cores) / n, 1),

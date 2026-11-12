@@ -103,7 +103,21 @@ class Queue:
             if pred():
                 return
             time.sleep(0.1)
-        raise AssertionError(f"timed out waiting for {what}")
+        raise AssertionError(f"timed out waiting for {what}\n--- daemon log:\n{self.daemon_log()}")
+
+    def daemon_log(self, lines: int = 30) -> str:
+        from gpushift import paths
+
+        try:
+            return "\n".join(paths.daemon_log().read_text(errors="replace").splitlines()[-lines:])
+        except OSError:
+            return "(none)"
+
+    def wait_resumable(self, jid):
+        """Until the job's checkpoint helper is set up (it then handles SIGTERM)."""
+        from gpushift import paths
+
+        self.wait_for(lambda: (paths.job_dir(jid) / "resumable").exists(), what=f"job {jid} resumable")
 
     def wait_state(self, jid, *states, timeout=20):
         self.wait_for(lambda: self.state(jid) in states, timeout, f"job {jid} -> {states} (is {self.state(jid)})")
