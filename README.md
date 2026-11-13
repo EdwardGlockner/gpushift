@@ -18,7 +18,8 @@ the queue steps aside whenever you need the GPUs yourself.
   a GPU that would otherwise sit idle, and small jobs share a GPU.
 - **You stay informed.** Agents hear when their jobs end, you get a desktop
   notification when one fails, and a local dashboard shows everything.
-- Windows, Linux and macOS, any number of NVIDIA GPUs. No configuration needed.
+- Windows, Linux and macOS, any number of NVIDIA GPUs, and AMD GPUs on Linux and
+  Windows. No configuration needed.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EdwardGlockner/gpushift/main/docs/img/gpushift-dark.svg">
@@ -81,6 +82,12 @@ Useful options:
 Jobs run in the folder and environment you submitted them from (including your
 virtualenv), on the GPUs gpushift picked for them. See `gpushift submit --help` for
 everything else.
+
+On AMD GPUs, jobs get their GPUs through `ROCR_VISIBLE_DEVICES` (Linux) or
+`HIP_VISIBLE_DEVICES` (Windows). No ROCm tools are needed. If NVIDIA GPUs are
+present too, only those are used. Integrated AMD graphics with less than 2 GB of
+dedicated memory are skipped. AMD GPUs on macOS are not supported (ROCm doesn't
+run there).
 
 ## When you need the GPUs
 
