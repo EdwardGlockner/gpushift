@@ -234,6 +234,22 @@ def test_packing_respects_memory_and_can_be_off():
     assert plan([sized(1, 1000), sized(2, 1000), sized(3, 1000)], [], off) == [(1, [0]), (2, [1])]
 
 
+def test_a_job_that_cannot_fit_now_holds_nothing_back():
+    # The desktop holds 1.5 GB of GPU 0, so a 7.7 GB job fits nowhere, even
+    # with no jobs running: the jobs behind it run meanwhile.
+    m = Machine(gpus=[0, 1], shared_gpu=1, slots=4, capacity={0: 6700, 1: 6144})
+    running = [(one(1), [0])]
+    assert plan([sized(2, 7700), one(3)], running, m) == [(3, [1])]
+    est = simulate([(sized(2, 7700), 60.0), (one(3), 60.0)], [(one(1), [0], 600.0)], m)
+    assert est[2] is None and est[3] == 0.0
+    # Once it would fit on an idle machine, it holds the others back again.
+    m = Machine(gpus=[0, 1], shared_gpu=1, slots=4, capacity={0: 8192, 1: 6144})
+    assert plan([sized(2, 7700), one(3)], running, m) == []
+    # Same for a whole-machine job while a program outside gpushift uses GPU 0.
+    m = Machine([0, 1], 1, 4, mem_ok={1})
+    assert plan([two(2), one(3)], [], m) == [(3, [1])]
+
+
 # ------------------------------------------------------------ running jobs ahead of their turn
 
 H = 3600.0

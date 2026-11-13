@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 (2026-11-13)
+
+- A job that needs more GPU memory than is free with no jobs running (because
+  other programs use it) no longer blocks the jobs behind it.
+
 ## 0.1.2 (2026-11-12)
 
 - Removed automatic free mode (freeing the GPUs while you run a game or other

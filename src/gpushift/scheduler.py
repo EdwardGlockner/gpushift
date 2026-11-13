@@ -17,6 +17,8 @@ Starvation guard (in-order head with reservations)
   expected duration says it ends before the waiting job could start anyway
   (when the running jobs it waits for are expected to end). Jobs without an
   estimate, or waiting on jobs without one, are simply held back.
+* A job that wouldn't fit even on an idle machine right now (programs outside
+  gpushift use the GPU memory it needs) holds nothing back until it would.
 Without the guard, any job that fits may start, like task-spooler.
 
 Dependencies (--after)
@@ -225,6 +227,7 @@ def plan(
     them, held-back jobs wait."""
     durations = durations or {}
     remaining = remaining or {}
+    idle = Usage(machine)  # the machine with no jobs on it
     u = Usage(machine)
     ends: list[tuple[Req, list[int], float | None]] = []
     for req, gpus in running:
@@ -247,7 +250,10 @@ def plan(
                 start(req, g)
             continue
         if g is None:
-            if guard and (req.barrier or req.uses_gpu):
+            # A job that wouldn't fit even with no jobs running (programs outside
+            # gpushift hold the memory it needs) holds nothing back: waiting for
+            # the queue to empty wouldn't help it.
+            if guard and (req.barrier or req.uses_gpu) and idle.fit(req) is not None:
                 deadline = min(deadline, reservation(req, ends, machine))
                 barrier_waiting = barrier_waiting or req.barrier
                 gpu_waiting = True
