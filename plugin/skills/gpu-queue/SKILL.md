@@ -90,8 +90,9 @@ Output: job id, queue position and estimated start time. `--json` gives
 `{"id", "position", "est_start", "mode", "log"}`.
 
 The job runs with the cwd and environment (venv/conda PATH, env vars) of the
-`gpushift submit` call. Inside the job, `CUDA_VISIBLE_DEVICES` is set to its GPUs, so
-the code should use `cuda:0`..`cuda:N-1` and not hardcode physical GPU ids.
+`gpushift submit` call. Inside the job, `CUDA_VISIBLE_DEVICES` is set to its GPUs (on
+AMD GPUs, `ROCR_VISIBLE_DEVICES`), so the code should use `cuda:0`..`cuda:N-1` and not
+hardcode physical GPU ids.
 
 ## Checking on jobs
 

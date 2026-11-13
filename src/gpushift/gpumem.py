@@ -2,7 +2,8 @@
 
 * Windows: the "GPU Process Memory" performance counters (what Task Manager
   shows); nvidia-smi can't report per-process memory under WDDM.
-* Linux: ``nvidia-smi -q -x``, which lists compute and graphics processes.
+* Linux: ``nvidia-smi -q -x``, which lists compute and graphics processes, or
+  amdgpu.py without nvidia-smi.
 * ``GPUSHIFT_FAKE_GPU_PROCS=<file.json>`` ({"pid": MiB, ...}) replaces both
   (tests use it).
 
@@ -15,14 +16,15 @@ import json
 import os
 import re
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
 from ._proc import NO_WINDOW
 
 
-def per_process() -> dict[int, int] | None:
+def per_process(pids=None) -> dict[int, int] | None:
     """pid -> MiB of dedicated GPU memory, summed over GPUs. None if this
-    machine can't tell."""
+    machine can't tell. ``pids`` limits the AMD reading."""
     fake = os.environ.get("GPUSHIFT_FAKE_GPU_PROCS")
     if fake is not None:
         try:
@@ -31,7 +33,15 @@ def per_process() -> dict[int, int] | None:
         except (OSError, ValueError):
             return {}
     try:
-        return _windows() if os.name == "nt" else _nvidia_smi()
+        if os.name == "nt":
+            return _windows()
+        from .gpus import nvidia_smi_path
+
+        if not nvidia_smi_path() and sys.platform.startswith("linux"):
+            from . import amdgpu
+
+            return amdgpu.per_process(pids) if amdgpu.devices() else None
+        return _nvidia_smi()
     except Exception:
         return None
 

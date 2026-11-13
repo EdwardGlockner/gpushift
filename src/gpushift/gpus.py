@@ -1,7 +1,8 @@
-"""GPU detection via nvidia-smi.
+"""GPU detection via nvidia-smi, or the amdgpu driver on Linux without it.
 
 ``GPUSHIFT_FAKE_GPUS`` (comma-separated memory sizes in MiB, e.g. ``8192,6144``;
-empty or ``0`` for none) replaces detection. Tests and CI use it.
+empty or ``0`` for none) replaces detection; ``GPUSHIFT_FAKE_GPU_VENDOR`` sets
+their vendor. Tests and CI use them.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 
 from ._proc import NO_WINDOW
@@ -26,6 +28,7 @@ class GPU:
     power_limit: float | None = None  # W
     fan: int | None = None  # %
     clock: int | None = None  # SM clock, MHz
+    vendor: str = "nvidia"  # nvidia | amd
 
     @property
     def free_perc(self) -> float:
@@ -62,11 +65,12 @@ def _fake() -> list[GPU] | None:
     fake = fake.strip()
     if fake in ("", "0"):
         return []
-    return [GPU(i, f"Fake GPU {i}", int(m), 0) for i, m in enumerate(fake.split(","))]
+    vendor = os.environ.get("GPUSHIFT_FAKE_GPU_VENDOR", "nvidia")
+    return [GPU(i, f"Fake GPU {i}", int(m), 0, vendor=vendor) for i, m in enumerate(fake.split(","))]
 
 
 def query() -> list[GPU]:
-    """Return all GPUs. ``[]`` if there is no NVIDIA driver.
+    """Return all GPUs. ``[]`` if there is no GPU driver.
 
     Raises GPUQueryError if nvidia-smi exists but fails."""
     fake = _fake()
@@ -74,6 +78,10 @@ def query() -> list[GPU]:
         return fake
     exe = nvidia_smi_path()
     if not exe:
+        if sys.platform.startswith("linux"):
+            from . import amdgpu
+
+            return amdgpu.query()
         return []
     try:
         out = subprocess.run(

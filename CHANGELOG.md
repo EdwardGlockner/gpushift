@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- AMD GPUs on Linux.
+- The hook also catches `HIP_VISIBLE_DEVICES=...` and `ROCR_VISIBLE_DEVICES=...`.
+
 ## 0.1.3 (2026-11-13)
 
 - A job that needs more GPU memory than is free with no jobs running (because

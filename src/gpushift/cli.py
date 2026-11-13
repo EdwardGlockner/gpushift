@@ -454,7 +454,7 @@ def cmd_status(a) -> int:
 
     for g in s["gpus"]:
         mem = f"{g['mem_used_mb'] / 1024:.1f}/{g['mem_total_mb'] / 1024:.1f} GB" if g["mem_total_mb"] else ""
-        name = trunc((g["name"] or "").replace("NVIDIA ", "").replace("GeForce ", ""), 16)
+        name = trunc((g["name"] or "").replace("NVIDIA ", "").replace("GeForce ", "").replace("AMD ", ""), 16)
         label = f"GPU {g['index']} {name:<16} {mem:<13}" + ("(shared) " if g["shared"] else "         ")
         if not g["jobs"]:
             print(f"{label}idle")
@@ -854,7 +854,7 @@ def cmd_init(a) -> int:
         for g in detected:
             print(f"  GPU {g.index}: {g.name}, {g.mem_total / 1024:.1f} GB ({g.mem_used / 1024:.1f} GB in use)")
     else:
-        print("  no NVIDIA GPUs found -> CPU-only mode (only --cpu/--exclusive jobs)")
+        print("  no NVIDIA or AMD GPUs found -> CPU-only mode (only --cpu/--exclusive jobs)")
     f = paths.config_file()
     if f.exists() and not a.force:
         print(f"config: keeping existing {f}")
@@ -894,17 +894,22 @@ def cmd_doctor(a) -> int:
 
     check(True, "gpushift", f"{__version__}, python {sys.version.split()[0]} at {sys.executable}")
     smi = gpus.nvidia_smi_path()
+    found = []
     try:
         found = gpus.query()
         check(
             True if found else None,
             "GPUs",
-            ", ".join(f"{g.index}:{g.name}" for g in found) or "none found (CPU-only mode)",
+            ", ".join(f"{g.index}:{g.name} ({g.vendor})" for g in found) or "none found (CPU-only mode)",
         )
     except gpus.GPUQueryError as e:
         check(False, "GPUs", str(e))
-    if not smi and not os.environ.get("GPUSHIFT_FAKE_GPUS"):
-        check(None, "nvidia-smi", "not found; install the NVIDIA driver to use GPUs")
+    if not smi and not found and not os.environ.get("GPUSHIFT_FAKE_GPUS"):
+        check(
+            None,
+            "GPU driver",
+            "no nvidia-smi and no AMD GPU found; install the NVIDIA driver (or, on Linux, the amdgpu driver)",
+        )
     f = paths.config_file()
     try:
         cfg = config.load()

@@ -15,7 +15,19 @@ import time
 from . import _proc, control, db, paths
 
 
-def _job_env(j: dict) -> dict[str, str]:
+def _visible_amd(env: dict[str, str], gpus: list[int]) -> None:
+    # HIP filters again after ROCR, so it gets 0..n-1. -1 hides all GPUs.
+    env["ROCR_VISIBLE_DEVICES"] = ",".join(map(str, gpus))
+    rel = ",".join(map(str, range(len(gpus)))) or "-1"
+    env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = rel
+
+
+def _vendor(con) -> str:
+    readings = control.gpu_readings(con)
+    return readings[0].vendor if readings else "nvidia"
+
+
+def _job_env(j: dict, vendor: str = "nvidia") -> dict[str, str]:
     env = dict(j["env"])
     jid = j["id"]
     env["GPUSHIFT_JOB_ID"] = str(jid)
@@ -27,7 +39,10 @@ def _job_env(j: dict) -> dict[str, str]:
     # Make CUDA's device numbering match nvidia-smi's.
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     if j["gpus"] or j["preset"] == "cpu" or j["n_gpus"] == 0:
-        env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, j["gpus"] or []))
+        if vendor == "amd":
+            _visible_amd(env, j["gpus"] or [])
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, j["gpus"] or []))
     env.setdefault("PYTHONUNBUFFERED", "1")
     lib = str(paths.pylib_dir())
     pp = env.get("PYTHONPATH")
@@ -87,7 +102,7 @@ def run(job_id: int) -> int:
         db.update(con, job_id, runner_pid=os.getpid(), runner_ctime=me_ctime, attempts=j["attempts"] + 1)
         j = db.get_job(con, job_id)
 
-    env = _job_env(j)
+    env = _job_env(j, _vendor(con))
     args, shell = _popen_args(j, env)
     started = time.time()
     with open(log, "ab", buffering=0) as out:

@@ -27,6 +27,18 @@ def test_run_logs_and_env(q):
     assert q.job(bad)["exit_code"] == 3
 
 
+def test_amd_jobs_see_only_their_gpus_under_rocm(q, monkeypatch):
+    q.kill_daemon()
+    monkeypatch.setitem(q.env, "GPUSHIFT_FAKE_GPU_VENDOR", "amd")
+    monkeypatch.setenv("GPUSHIFT_FAKE_GPU_VENDOR", "amd")
+    q.start()
+    show = "import os; print('vis=' + '/'.join(os.environ[v] for v in ('ROCR_VISIBLE_DEVICES', 'HIP_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES')))"
+    for preset, expected in (("--one", "vis=0/0/0"), ("--two", "vis=0,1/0,1/0,1"), ("--cpu", "vis=/-1/-1")):
+        jid = q.submit(preset, "--", PY, "-c", show)
+        q.wait_state(jid, "done")
+        assert expected in q.log(jid), preset
+
+
 def test_logs_have_no_blank_lines_between_output_lines(q):
     jid = q.submit("--cpu", "--", PY, "-c", "print('a'); print('b'); print('c')")
     q.wait_state(jid, "done")

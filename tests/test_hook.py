@@ -28,6 +28,8 @@ BLOCKED = [
     ("python -m torch.distributed.launch main.py", "one"),
     ("CUDA_VISIBLE_DEVICES=0 python main.py", "one"),
     ("CUDA_VISIBLE_DEVICES=1 python -m mypkg.eval", "one"),
+    ("HIP_VISIBLE_DEVICES=0 python main.py", "one"),
+    ("ROCR_VISIBLE_DEVICES=1 python -m mypkg.eval", "one"),
     ("export CUDA_VISIBLE_DEVICES=0; python main.py", None),  # export form is not detected (documented miss)
     ("cd exp && python train.py --cfg a.yaml", "one"),
     ("source .venv/bin/activate && python train.py", "one"),
