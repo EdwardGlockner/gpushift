@@ -1,19 +1,17 @@
-"""GPU detection via nvidia-smi, or the amdgpu driver on Linux without it.
+"""GPUs from NVIDIA (nvidia.py) or AMD (amd.py). With nvidia-smi present, only
+NVIDIA GPUs are used.
 
 ``GPUSHIFT_FAKE_GPUS`` (comma-separated memory sizes in MiB, e.g. ``8192,6144``;
 empty or ``0`` for none) replaces detection; ``GPUSHIFT_FAKE_GPU_VENDOR`` sets
-their vendor. Tests and CI use them.
+their vendor. ``GPUSHIFT_FAKE_GPU_PROCS=<file.json>`` ({"pid": MiB, ...})
+replaces per-process memory. Tests and CI use them.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import shutil
-import subprocess
-import sys
 from dataclasses import asdict, dataclass
-
-from ._proc import NO_WINDOW
 
 
 @dataclass
@@ -44,18 +42,10 @@ class GPUQueryError(RuntimeError):
     pass
 
 
-def nvidia_smi_path() -> str | None:
-    p = shutil.which("nvidia-smi")
-    if p:
-        return p
-    if os.name == "nt":
-        for c in (
-            r"C:\Windows\System32\nvidia-smi.exe",
-            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
-        ):
-            if os.path.exists(c):
-                return c
-    return None
+def backend(vendor: str):
+    from . import amd, nvidia
+
+    return amd if vendor == "amd" else nvidia
 
 
 def _fake() -> list[GPU] | None:
@@ -70,57 +60,15 @@ def _fake() -> list[GPU] | None:
 
 
 def query() -> list[GPU]:
-    """Return all GPUs. ``[]`` if there is no GPU driver.
+    """All GPUs, ``[]`` if there is no GPU driver.
 
     Raises GPUQueryError if nvidia-smi exists but fails."""
     fake = _fake()
     if fake is not None:
         return fake
-    exe = nvidia_smi_path()
-    if not exe:
-        if sys.platform.startswith("linux"):
-            from . import amdgpu
+    from . import amd, nvidia
 
-            return amdgpu.query()
-        return []
-    try:
-        out = subprocess.run(
-            [exe, f"--query-gpu={QUERY}", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise GPUQueryError(f"nvidia-smi failed: {e}") from e
-    if out.returncode != 0:
-        raise GPUQueryError(f"nvidia-smi failed: {(out.stderr or out.stdout).strip()}")
-    return [g for g in map(parse_line, out.stdout.strip().splitlines()) if g is not None]
-
-
-QUERY = "index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm"
-
-
-def _num(s: str, kind=int):
-    """A number from nvidia-smi, or None for "[N/A]", "[Not Supported]" etc."""
-    try:
-        return kind(float(s))
-    except ValueError:
-        return None
-
-
-def parse_line(line: str) -> GPU | None:
-    parts = [p.strip() for p in line.split(",")]
-    if len(parts) < 4:
-        return None
-    try:
-        g = GPU(int(parts[0]), parts[1], int(float(parts[2])), int(float(parts[3])))
-    except ValueError:
-        return None
-    extra = parts[4:10] + [""] * (6 - len(parts[4:10]))
-    g.util, g.temp, g.fan, g.clock = _num(extra[0]), _num(extra[1]), _num(extra[4]), _num(extra[5])
-    g.power, g.power_limit = _num(extra[2], float), _num(extra[3], float)
-    return g
+    return nvidia.query() if nvidia.available() else amd.query()
 
 
 def detect() -> list[GPU]:
@@ -129,3 +77,28 @@ def detect() -> list[GPU]:
         return query()
     except GPUQueryError:
         return []
+
+
+def per_process(pids=None) -> dict[int, int] | None:
+    """pid -> MiB of GPU memory. None if unknown."""
+    fake = os.environ.get("GPUSHIFT_FAKE_GPU_PROCS")
+    if fake is not None:
+        try:
+            with open(fake, encoding="utf-8") as f:
+                return {int(k): int(v) for k, v in json.load(f).items()}
+        except (OSError, ValueError):
+            return {}
+    try:
+        if os.name == "nt":  # nvidia-smi can't report per-process memory under WDDM
+            from . import windows
+
+            return windows.process_memory()
+        from . import amd, nvidia
+
+        return nvidia.per_process() if nvidia.available() else amd.per_process(pids)
+    except Exception:
+        return None
+
+
+def visible_env(env: dict[str, str], gpus: list[int], vendor: str) -> None:
+    backend(vendor).visible_env(env, gpus)

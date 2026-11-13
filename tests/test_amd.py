@@ -1,11 +1,13 @@
-"""AMD support, against a fake /sys and /proc."""
+"""AMD support and Windows counters."""
 
 import os
 from pathlib import Path
 
 import pytest
 
-from gpushift import amdgpu, runner
+from gpushift import amd, runner, windows
+
+linux_paths = pytest.mark.skipif(os.name == "nt", reason="sysfs paths have colons; fds are symlinks")
 
 
 def write(path: Path, text: str) -> None:
@@ -25,7 +27,6 @@ def node(sys_root: Path, n: int, simd: int, location: int = 0, gpu_id: int = 0, 
 
 @pytest.fixture
 def sysfs(tmp_path, monkeypatch):
-    """A CPU node and two GPUs; the second has no sensors."""
     root = tmp_path / "sys"
     node(root, 0, 0)
     node(root, 1, 64, location=0x300, gpu_id=7773, gfx=120000)
@@ -63,13 +64,14 @@ def sysfs(tmp_path, monkeypatch):
         "\t\t1002 0e31  Subsystem\n"
         "1003  ULSI\n"
     )
-    monkeypatch.setattr(amdgpu, "PCI_IDS", (str(tmp_path / "missing.ids"), str(ids)))
-    monkeypatch.setattr(amdgpu, "_names", {})
+    monkeypatch.setattr(amd, "PCI_IDS", (str(tmp_path / "missing.ids"), str(ids)))
+    monkeypatch.setattr(amd, "_names", {})
     return root
 
 
+@linux_paths
 def test_gpus_in_rocm_order_with_readings(sysfs):
-    g0, g1 = amdgpu.query(str(sysfs))
+    g0, g1 = amd.query_linux(str(sysfs))
     assert (g0.index, g0.name, g0.mem_total, g0.mem_used, g0.vendor) == (
         0,
         "AMD Radeon RX 9050 / 9060 XT",
@@ -89,8 +91,8 @@ def test_gpus_in_rocm_order_with_readings(sysfs):
 
 
 def test_no_amd_gpus(tmp_path):
-    assert amdgpu.query(str(tmp_path)) == []
-    assert amdgpu.per_process([1], str(tmp_path), str(tmp_path)) == {}
+    assert amd.query_linux(str(tmp_path)) == []
+    assert amd.per_process_linux([1], str(tmp_path), str(tmp_path)) == {}
 
 
 def fd(proc: Path, pid: int, n: int, target: str, info: str = "") -> None:
@@ -104,27 +106,26 @@ def amd_fd(client: int, kib: int, key: str = "drm-resident-vram") -> str:
     return f"pos:\t0\ndrm-driver:\tamdgpu\ndrm-client-id:\t{client}\ndrm-pdev:\t0000:03:00.0\n{key}:\t{kib} KiB\n"
 
 
+@linux_paths
 def test_per_process_memory(sysfs, tmp_path):
     proc = tmp_path / "proc"
-    # Same client counts once.
     fd(proc, 100, 3, "/dev/dri/renderD128", amd_fd(40, 1024 * 1024))
     fd(proc, 100, 4, "/dev/dri/renderD128", amd_fd(40, 1024 * 1024))
     fd(proc, 100, 5, "/dev/dri/renderD128", amd_fd(41, 512 * 1024, key="drm-memory-vram"))
     fd(proc, 100, 6, "/dev/null")
     fd(proc, 200, 3, "/dev/dri/renderD129", "drm-driver:\ti915\ndrm-client-id:\t1\ndrm-resident-vram:\t9999 KiB\n")
-    # KFD reports more than fdinfo.
     fd(proc, 300, 3, "/dev/dri/renderD128", amd_fd(50, 100 * 1024))
     write(sysfs / "class/kfd/kfd/proc/300/vram_7773", str(3 * 2**30))
     write(sysfs / "class/kfd/kfd/proc/300/vram_8001", str(1 * 2**30))
-    used = amdgpu.per_process([100, 200, 300, 400], str(proc), str(sysfs))
+    used = amd.per_process_linux([100, 200, 300, 400], str(proc), str(sysfs))
     assert used == {100: 1536, 300: 4096}
-    assert amdgpu.per_process([300], str(proc), str(sysfs)) == {300: 4096}
-    assert amdgpu.per_process(None, str(proc), str(sysfs)) == used
+    assert amd.per_process_linux([300], str(proc), str(sysfs)) == {300: 4096}
+    assert amd.per_process_linux(None, str(proc), str(sysfs)) == used
 
 
 JOB = {
     "id": 7,
-    "env": {"CUDA_VISIBLE_DEVICES": "3", "HIP_VISIBLE_DEVICES": "2"},  # inherited
+    "env": {"CUDA_VISIBLE_DEVICES": "3", "HIP_VISIBLE_DEVICES": "2"},
     "attempts": 0,
     "resume": 0,
     "gpus": [1, 2],
@@ -133,15 +134,48 @@ JOB = {
 }
 
 
-def test_amd_job_sees_only_its_gpus(monkeypatch, tmp_path):
-    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
-    env = runner._job_env(JOB, "amd")
+def test_amd_visible_env():
+    env = {}
+    amd.visible_env(env, [1, 2], windows=False)
     assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"], env["CUDA_VISIBLE_DEVICES"]) == (
         "1,2",
         "0,1",
         "0,1",
     )
-    cpu = runner._job_env({**JOB, "gpus": [], "preset": "cpu", "n_gpus": 0}, "amd")
-    assert (cpu["ROCR_VISIBLE_DEVICES"], cpu["HIP_VISIBLE_DEVICES"], cpu["CUDA_VISIBLE_DEVICES"]) == ("", "-1", "-1")
+    env = {}
+    amd.visible_env(env, [], windows=False)
+    assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"], env["CUDA_VISIBLE_DEVICES"]) == ("", "-1", "-1")
+    env = {}
+    amd.visible_env(env, [1, 2], windows=True)
+    assert env == {"HIP_VISIBLE_DEVICES": "1,2", "CUDA_VISIBLE_DEVICES": "1,2"}
+    env = {}
+    amd.visible_env(env, [], windows=True)
+    assert env == {"HIP_VISIBLE_DEVICES": "-1", "CUDA_VISIBLE_DEVICES": "-1"}
+
+
+def test_job_env_by_vendor(monkeypatch, tmp_path):
+    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    a = runner._job_env(JOB, "amd")
+    assert a["HIP_VISIBLE_DEVICES"] in ("0,1", "1,2") and a["CUDA_VISIBLE_DEVICES"] != "3"
     nv = runner._job_env(JOB, "nvidia")
-    assert nv["CUDA_VISIBLE_DEVICES"] == "1,2" and "ROCR_VISIBLE_DEVICES" not in nv
+    assert nv["CUDA_VISIBLE_DEVICES"] == "1,2" and nv["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+    assert "ROCR_VISIBLE_DEVICES" not in nv
+
+
+LUID = "luid_0x00000000_0x0000D1F4_phys_0"
+
+
+def test_windows_counters():
+    luid = 0xD1F4
+    assert windows.by_pid({f"pid_10_{LUID}": 3 * 2**30, "pid_10_luid_0x0_0x1_phys_0": 2**30, "_Total": 9e9}) == {
+        10: 4096
+    }
+    assert windows.by_luid({LUID: 2 * 2**30, "luid_0x00000000_0x00000001_phys_0": 1.0}) == {luid: 2 * 2**30, 1: 1.0}
+    load = {
+        f"pid_1_{LUID}_eng_0_engtype_3D": 30.0,
+        f"pid_2_{LUID}_eng_0_engtype_3D": 25.0,
+        f"pid_1_{LUID}_eng_3_engtype_Compute": 40.0,
+        f"pid_2_{LUID}_eng_3_engtype_Compute": 80.0,
+    }
+    assert windows.busiest_engine(load) == {luid: 100.0}
+    assert windows.busiest_engine({k: v / 4 for k, v in load.items()}) == {luid: 30.0}

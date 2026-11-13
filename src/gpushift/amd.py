@@ -1,13 +1,14 @@
-"""AMD GPUs on Linux, read from the amdgpu driver in /sys and /proc.
-
-GPU indices follow ROCm's order (KFD topology nodes)."""
+"""AMD GPUs on Linux (amdgpu driver) and Windows (DXGI). Indices follow HIP's order."""
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from .gpus import GPU
+
+LINUX = sys.platform.startswith("linux")
 
 AMD = 0x1002
 KFD = "class/kfd/kfd"
@@ -74,7 +75,7 @@ def _pci_name(device_id: int) -> str | None:
                 for line in fh:
                     if not line.strip() or line.startswith("#"):
                         continue
-                    if not line.startswith("\t"):  # vendor line
+                    if not line.startswith("\t"):
                         if in_amd:
                             break
                         in_amd = line.startswith(f"{AMD:04x}  ")
@@ -94,7 +95,6 @@ def _name(dev: Path, props: dict[str, int]) -> str:
         return product
     pci = _pci_name(_int(dev / "device") or props.get("device_id", 0))
     if pci:
-        # "Navi 44 [Radeon RX 9060 XT]" -> "AMD Radeon RX 9060 XT"
         if "[" in pci and pci.endswith("]"):
             pci = pci[pci.index("[") + 1 : -1]
         return f"AMD {pci}"
@@ -109,7 +109,72 @@ def _hwmon(dev: Path) -> Path | None:
         return None
 
 
-def query(sys_root: str = "/sys") -> list[GPU]:
+def available() -> bool:
+    if os.name == "nt":
+        return bool(_windows_adapters())
+    return LINUX and bool(devices())
+
+
+def query() -> list[GPU]:
+    if os.name == "nt":
+        return query_windows()
+    return query_linux() if LINUX else []
+
+
+def per_process(pids=None) -> dict[int, int] | None:
+    return per_process_linux(pids) if LINUX and devices() else None
+
+
+def visible_env(env: dict[str, str], gpus: list[int], windows: bool = os.name == "nt") -> None:
+    ids = ",".join(map(str, gpus))
+    if windows:
+        env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = ids or "-1"
+        return
+    # HIP filters again after ROCR, so it gets 0..n-1. -1 hides all GPUs.
+    env["ROCR_VISIBLE_DEVICES"] = ids
+    env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(len(gpus)))) or "-1"
+
+
+def _windows_adapters():
+    from . import windows
+
+    try:
+        return [a for a in windows.adapters() if a.vendor == AMD]
+    except OSError:
+        return []
+
+
+_counters = None
+
+
+def query_windows() -> list[GPU]:
+    # Assumes HIP numbers AMD GPUs in DXGI order.
+    from . import windows
+
+    global _counters
+    found = _windows_adapters()
+    if not found:
+        return []
+    if _counters is None:
+        _counters = windows.Counters(
+            r"\GPU Adapter Memory(*)\Dedicated Usage", r"\GPU Engine(*)\Utilization Percentage"
+        )
+    r = _counters.read()
+    mem, load = (windows.by_luid(r[0]), windows.busiest_engine(r[1])) if r else ({}, {})
+    return [
+        GPU(
+            i,
+            a.name,
+            a.mem_total,
+            int(mem.get(a.luid, 0)) // MiB,
+            util=round(load[a.luid]) if a.luid in load else None,
+            vendor="amd",
+        )
+        for i, a in enumerate(found)
+    ]
+
+
+def query_linux(sys_root: str = "/sys") -> list[GPU]:
     out = []
     for idx, _, dev, props in devices(sys_root):
         g = GPU(
@@ -138,7 +203,7 @@ def query(sys_root: str = "/sys") -> list[GPU]:
 
 
 def _kib(v: str | None) -> int:
-    """'119632 KiB' -> 119632. No unit means bytes."""
+    """Size in KiB. No unit means bytes."""
     if not v:
         return 0
     num, _, unit = v.partition(" ")
@@ -150,7 +215,6 @@ def _kib(v: str | None) -> int:
 
 
 def _fdinfo_kib(proc: Path) -> int:
-    """VRAM in KiB held through a process's amdgpu fds."""
     try:
         fds = os.listdir(proc / "fd")
     except OSError:
@@ -170,15 +234,14 @@ def _fdinfo_kib(proc: Path) -> int:
         if info.get("drm-driver") != "amdgpu":
             continue
         client = (info.get("drm-pdev"), info.get("drm-client-id"))
-        if client in seen:  # several fds can share one client
+        if client in seen:
             continue
         seen.add(client)
         total += _kib(info.get("drm-resident-vram") or info.get("drm-memory-vram"))
     return total
 
 
-def per_process(pids=None, proc_root: str = "/proc", sys_root: str = "/sys") -> dict[int, int]:
-    """pid -> MiB of VRAM. Reads all processes if pids is None."""
+def per_process_linux(pids=None, proc_root: str = "/proc", sys_root: str = "/sys") -> dict[int, int]:
     if pids is None:
         try:
             pids = [int(p) for p in os.listdir(proc_root) if p.isdigit()]

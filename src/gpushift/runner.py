@@ -12,14 +12,7 @@ import subprocess
 import sys
 import time
 
-from . import _proc, control, db, paths
-
-
-def _visible_amd(env: dict[str, str], gpus: list[int]) -> None:
-    # HIP filters again after ROCR, so it gets 0..n-1. -1 hides all GPUs.
-    env["ROCR_VISIBLE_DEVICES"] = ",".join(map(str, gpus))
-    rel = ",".join(map(str, range(len(gpus)))) or "-1"
-    env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = rel
+from . import _proc, control, db, gpus, paths
 
 
 def _vendor(con) -> str:
@@ -36,13 +29,8 @@ def _job_env(j: dict, vendor: str = "nvidia") -> dict[str, str]:
     env["GPUSHIFT_ATTEMPT"] = str(j["attempts"])
     env["GPUSHIFT_RESUME"] = "1" if j["resume"] else "0"
     env["GPUSHIFT_GPUS"] = ",".join(map(str, j["gpus"] or []))
-    # Make CUDA's device numbering match nvidia-smi's.
-    env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     if j["gpus"] or j["preset"] == "cpu" or j["n_gpus"] == 0:
-        if vendor == "amd":
-            _visible_amd(env, j["gpus"] or [])
-        else:
-            env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, j["gpus"] or []))
+        gpus.visible_env(env, j["gpus"] or [], vendor)
     env.setdefault("PYTHONUNBUFFERED", "1")
     lib = str(paths.pylib_dir())
     pp = env.get("PYTHONPATH")

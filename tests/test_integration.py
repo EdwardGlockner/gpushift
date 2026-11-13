@@ -32,8 +32,12 @@ def test_amd_jobs_see_only_their_gpus_under_rocm(q, monkeypatch):
     monkeypatch.setitem(q.env, "GPUSHIFT_FAKE_GPU_VENDOR", "amd")
     monkeypatch.setenv("GPUSHIFT_FAKE_GPU_VENDOR", "amd")
     q.start()
-    show = "import os; print('vis=' + '/'.join(os.environ[v] for v in ('ROCR_VISIBLE_DEVICES', 'HIP_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES')))"
-    for preset, expected in (("--one", "vis=0/0/0"), ("--two", "vis=0,1/0,1/0,1"), ("--cpu", "vis=/-1/-1")):
+    show = "import os; print('vis=' + '/'.join(os.environ.get(v, '') for v in ('ROCR_VISIBLE_DEVICES', 'HIP_VISIBLE_DEVICES', 'CUDA_VISIBLE_DEVICES')))"
+    if os.name == "nt":
+        cases = (("--one", "vis=/0/0"), ("--two", "vis=/0,1/0,1"), ("--cpu", "vis=/-1/-1"))
+    else:
+        cases = (("--one", "vis=0/0/0"), ("--two", "vis=0,1/0,1/0,1"), ("--cpu", "vis=/-1/-1"))
+    for preset, expected in cases:
         jid = q.submit(preset, "--", PY, "-c", show)
         q.wait_state(jid, "done")
         assert expected in q.log(jid), preset

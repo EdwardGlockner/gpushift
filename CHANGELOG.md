@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- AMD GPUs on Linux.
+- AMD GPUs on Linux and Windows.
 - The hook also catches `HIP_VISIBLE_DEVICES=...` and `ROCR_VISIBLE_DEVICES=...`.
 
 ## 0.1.3 (2026-11-13)

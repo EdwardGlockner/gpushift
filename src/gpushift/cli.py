@@ -893,7 +893,6 @@ def cmd_doctor(a) -> int:
         print(f"[{tag}] {label}{(': ' + detail) if detail else ''}")
 
     check(True, "gpushift", f"{__version__}, python {sys.version.split()[0]} at {sys.executable}")
-    smi = gpus.nvidia_smi_path()
     found = []
     try:
         found = gpus.query()
@@ -904,12 +903,8 @@ def cmd_doctor(a) -> int:
         )
     except gpus.GPUQueryError as e:
         check(False, "GPUs", str(e))
-    if not smi and not found and not os.environ.get("GPUSHIFT_FAKE_GPUS"):
-        check(
-            None,
-            "GPU driver",
-            "no nvidia-smi and no AMD GPU found; install the NVIDIA driver (or, on Linux, the amdgpu driver)",
-        )
+    if not found and not os.environ.get("GPUSHIFT_FAKE_GPUS"):
+        check(None, "GPU driver", "no NVIDIA or AMD GPU found; install the GPU driver to use GPUs")
     f = paths.config_file()
     try:
         cfg = config.load()
