@@ -14,6 +14,10 @@ AMD = 0x1002
 KFD = "class/kfd/kfd"
 PCI_IDS = ("/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids", "/usr/share/pci.ids")
 MiB = 1024 * 1024
+# Less dedicated memory than this means integrated graphics with a small
+# carve-out (most Ryzen CPUs): useless for jobs, and ROCm usually skips it. APUs
+# with a large carve-out (Strix Halo etc.) stay in.
+MIN_VRAM_MIB = 2048
 
 
 def _read(p: Path) -> str | None:
@@ -89,6 +93,16 @@ def _pci_name(device_id: int) -> str | None:
     return name
 
 
+def usable(sys_root: str = "/sys") -> list[tuple[int, Path, dict[str, int]]]:
+    """(ROCr index, PCI device dir, properties) of the GPUs jobs can use, in
+    gpushift's order."""
+    return [
+        (i, dev, props)
+        for i, _, dev, props in devices(sys_root)
+        if (_int(dev / "mem_info_vram_total") or 0) // MiB >= MIN_VRAM_MIB
+    ]
+
+
 def _name(dev: Path, props: dict[str, int]) -> str:
     product = _read(dev / "product_name")
     if product:
@@ -112,7 +126,7 @@ def _hwmon(dev: Path) -> Path | None:
 def available() -> bool:
     if os.name == "nt":
         return bool(_windows_adapters())
-    return LINUX and bool(devices())
+    return LINUX and bool(usable())
 
 
 def query() -> list[GPU]:
@@ -125,13 +139,15 @@ def per_process(pids=None) -> dict[int, int] | None:
     return per_process_linux(pids) if LINUX and devices() else None
 
 
-def visible_env(env: dict[str, str], gpus: list[int], windows: bool = os.name == "nt") -> None:
-    ids = ",".join(map(str, gpus))
+def visible_env(env: dict[str, str], gpus: list[int], windows: bool = os.name == "nt", sys_root: str = "/sys") -> None:
     if windows:
-        env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = ids or "-1"
+        # HIP on Windows skips integrated GPUs it doesn't support, as usable() does.
+        env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, gpus)) or "-1"
         return
+    # ROCr counts every GPU, skipped integrated ones included.
+    rocr = [i for i, _, _ in usable(sys_root)]
+    env["ROCR_VISIBLE_DEVICES"] = ",".join(str(rocr[g] if g < len(rocr) else g) for g in gpus)
     # HIP filters again after ROCR, so it gets 0..n-1. -1 hides all GPUs.
-    env["ROCR_VISIBLE_DEVICES"] = ids
     env["HIP_VISIBLE_DEVICES"] = env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, range(len(gpus)))) or "-1"
 
 
@@ -139,7 +155,7 @@ def _windows_adapters():
     from . import windows
 
     try:
-        return [a for a in windows.adapters() if a.vendor == AMD]
+        return [a for a in windows.adapters() if a.vendor == AMD and a.mem_total >= MIN_VRAM_MIB]
     except OSError:
         return []
 
@@ -176,7 +192,7 @@ def query_windows() -> list[GPU]:
 
 def query_linux(sys_root: str = "/sys") -> list[GPU]:
     out = []
-    for idx, _, dev, props in devices(sys_root):
+    for idx, (_, dev, props) in enumerate(usable(sys_root)):
         g = GPU(
             idx,
             _name(dev, props),

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- AMD GPUs on Linux and Windows.
+- AMD GPUs on Linux and Windows (not macOS). Integrated graphics with less than
+  2 GB of dedicated memory are skipped.
 - The hook also catches `HIP_VISIBLE_DEVICES=...` and `ROCR_VISIBLE_DEVICES=...`.
 
 ## 0.1.3 (2026-11-13)

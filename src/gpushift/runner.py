@@ -15,11 +15,6 @@ import time
 from . import _proc, control, db, gpus, paths
 
 
-def _vendor(con) -> str:
-    readings = control.gpu_readings(con)
-    return readings[0].vendor if readings else "nvidia"
-
-
 def _job_env(j: dict, vendor: str = "nvidia") -> dict[str, str]:
     env = dict(j["env"])
     jid = j["id"]
@@ -90,7 +85,7 @@ def run(job_id: int) -> int:
         db.update(con, job_id, runner_pid=os.getpid(), runner_ctime=me_ctime, attempts=j["attempts"] + 1)
         j = db.get_job(con, job_id)
 
-    env = _job_env(j, _vendor(con))
+    env = _job_env(j, gpus.vendor())
     args, shell = _popen_args(j, env)
     started = time.time()
     with open(log, "ab", buffering=0) as out:

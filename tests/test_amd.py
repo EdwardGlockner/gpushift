@@ -54,6 +54,8 @@ def sysfs(tmp_path, monkeypatch):
     }.items():
         write(hw / f, v + "\n")
     write(root / "bus/pci/devices/0000:04:00.0/mem_info_vram_total", str(64 * 2**30))
+    node(root, 3, 4, location=0x500, gpu_id=9001, gfx=110300)  # integrated, 512 MiB carve-out
+    write(root / "bus/pci/devices/0000:05:00.0/mem_info_vram_total", str(512 * 2**20))
     ids = tmp_path / "pci.ids"
     ids.write_text(
         "# comment\n"
@@ -134,16 +136,34 @@ JOB = {
 }
 
 
-def test_amd_visible_env():
+@linux_paths
+def test_integrated_gpu_is_skipped_but_rocr_still_counts_it(tmp_path):
+    root = tmp_path / "sys"
+    node(root, 0, 0)
+    node(root, 1, 4, location=0x500, gpu_id=1)  # integrated, 512 MiB carve-out: ROCr index 0
+    node(root, 2, 64, location=0x300, gpu_id=2)
+    node(root, 3, 64, location=0x400, gpu_id=3)
+    for bus, mib in (("05", 512), ("03", 16384), ("04", 8192)):
+        write(root / f"bus/pci/devices/0000:{bus}:00.0/mem_info_vram_total", str(mib * 2**20))
+    assert [(g.index, g.mem_total) for g in amd.query_linux(str(root))] == [(0, 16384), (1, 8192)]
     env = {}
-    amd.visible_env(env, [1, 2], windows=False)
+    amd.visible_env(env, [1], windows=False, sys_root=str(root))
+    assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"]) == ("2", "0")
+    env = {}
+    amd.visible_env(env, [0, 1], windows=False, sys_root=str(root))
+    assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"]) == ("1,2", "0,1")
+
+
+def test_amd_visible_env(tmp_path):
+    env = {}
+    amd.visible_env(env, [1, 2], windows=False, sys_root=str(tmp_path))  # no sysfs: ids pass through
     assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"], env["CUDA_VISIBLE_DEVICES"]) == (
         "1,2",
         "0,1",
         "0,1",
     )
     env = {}
-    amd.visible_env(env, [], windows=False)
+    amd.visible_env(env, [], windows=False, sys_root=str(tmp_path))
     assert (env["ROCR_VISIBLE_DEVICES"], env["HIP_VISIBLE_DEVICES"], env["CUDA_VISIBLE_DEVICES"]) == ("", "-1", "-1")
     env = {}
     amd.visible_env(env, [1, 2], windows=True)
@@ -155,8 +175,15 @@ def test_amd_visible_env():
 
 def test_job_env_by_vendor(monkeypatch, tmp_path):
     monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    monkeypatch.setattr(amd, "usable", lambda *a: [])  # no sysfs: ids pass through to ROCr
     a = runner._job_env(JOB, "amd")
-    assert a["HIP_VISIBLE_DEVICES"] in ("0,1", "1,2") and a["CUDA_VISIBLE_DEVICES"] != "3"
+    if os.name == "nt":
+        assert (a["HIP_VISIBLE_DEVICES"], a["CUDA_VISIBLE_DEVICES"]) == ("1,2", "1,2")
+        assert "ROCR_VISIBLE_DEVICES" not in a
+    else:
+        assert (a["HIP_VISIBLE_DEVICES"], a["CUDA_VISIBLE_DEVICES"]) == ("0,1", "0,1")
+        assert a["ROCR_VISIBLE_DEVICES"] == "1,2"
+    assert "CUDA_DEVICE_ORDER" not in a
     nv = runner._job_env(JOB, "nvidia")
     assert nv["CUDA_VISIBLE_DEVICES"] == "1,2" and nv["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
     assert "ROCR_VISIBLE_DEVICES" not in nv

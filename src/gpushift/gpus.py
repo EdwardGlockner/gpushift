@@ -71,6 +71,15 @@ def query() -> list[GPU]:
     return nvidia.query() if nvidia.available() else amd.query()
 
 
+def vendor() -> str:
+    """Whose GPUs query() returns: nvidia or amd."""
+    if os.environ.get("GPUSHIFT_FAKE_GPUS") is not None:
+        return os.environ.get("GPUSHIFT_FAKE_GPU_VENDOR", "nvidia")
+    from . import amd, nvidia
+
+    return "amd" if not nvidia.available() and amd.available() else "nvidia"
+
+
 def detect() -> list[GPU]:
     """Like query(), but returns [] instead of raising."""
     try:

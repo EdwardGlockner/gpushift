@@ -85,7 +85,9 @@ everything else.
 
 On AMD GPUs, jobs get their GPUs through `ROCR_VISIBLE_DEVICES` (Linux) or
 `HIP_VISIBLE_DEVICES` (Windows). No ROCm tools are needed. If NVIDIA GPUs are
-present too, only those are used.
+present too, only those are used. Integrated AMD graphics with less than 2 GB of
+dedicated memory are skipped. AMD GPUs on macOS are not supported (ROCm doesn't
+run there).
 
 ## When you need the GPUs
 
