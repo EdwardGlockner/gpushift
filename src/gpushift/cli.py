@@ -509,6 +509,51 @@ def cmd_show(a) -> int:
     return 0
 
 
+def event_public(e: dict) -> dict:
+    return {
+        "id": e["id"],
+        "t": iso(e["t"]),
+        "job": e["job_id"],
+        "kind": e["kind"],
+        "from": e["old"],
+        "to": e["new"],
+        "gpus": e["gpus"] or [],
+        "runtime_s": None if e["runtime"] is None else round(e["runtime"]),
+        "exit_code": e["exit_code"],
+        "note": e["note"],
+    }
+
+
+def event_line(e: dict) -> str:
+    who = f"job {e['job_id']}" if e["job_id"] is not None else e["kind"]
+    if e["kind"] in ("moved", "retry"):
+        what, note = e["note"], None
+    elif e["kind"] == "daemon":
+        what, note = e["new"], e["note"]
+    elif e["old"] is None:
+        what, note = "submitted", e["note"]
+    else:
+        what, note = f"{e['old']} -> {e['new']}", e["note"]
+        if e["new"] == "running" and e["gpus"]:
+            what += " on GPU " + ",".join(map(str, e["gpus"]))
+    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["t"]))
+    return f"{t}  {who:<9} {what}" + (f"  ({note})" if note and note != e["new"] else "")
+
+
+def cmd_events(a) -> int:
+    con = db.connect()
+    if a.id is not None:
+        get_job_or_fail(con, a.id)
+    limit = a.tail if a.tail is not None else (None if a.id is not None else 50)
+    evs = db.events(con, a.id, limit)
+    if a.json:
+        _print_json({"schema": 1, "events": [event_public(e) for e in evs]})
+    else:
+        for e in evs:
+            print(event_line(e))
+    return 0
+
+
 def cmd_priority(a) -> int:
     con = db.connect()
     get_job_or_fail(con, a.id)
@@ -535,6 +580,8 @@ def cmd_swap(a) -> int:
             raise CLIError(problem)
         db.update(con, x["id"], position=y["position"], prio=y["prio"])
         db.update(con, y["id"], position=x["position"], prio=x["prio"])
+        db.log_event(con, "moved", x["id"], note=f"swapped with job {y['id']}")
+        db.log_event(con, "moved", y["id"], note=f"swapped with job {x['id']}")
     print(f"swapped jobs {a.a} and {a.b}")
     return 0
 
@@ -581,6 +628,7 @@ def cmd_retry(a) -> int:
             resume=int(a.resume),
             **{k: j[k] for k in keep},
         )
+        db.log_event(con, "retry", jid, note=f"retry of job {a.id}")
     paths.job_dir(jid).mkdir(parents=True, exist_ok=True)
     ensure_daemon()
     print(f"job {jid} queued (retry of job {a.id})")
@@ -1039,6 +1087,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("id", type=int)
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_show)
+
+    s = sub.add_parser("events", help="what happened to a job (or the queue) and when")
+    s.add_argument("id", type=int, nargs="?")
+    s.add_argument("-n", "--tail", type=int, help="only the last N events (default without an id: 50)")
+    s.add_argument("--json", action="store_true", help="stable machine-readable output (schema 1)")
+    s.set_defaults(func=cmd_events)
 
     s = sub.add_parser("priority", help="move a queued job to the front")
     s.add_argument("id", type=int)

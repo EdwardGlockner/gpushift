@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import _proc, config, control, cpustat, db, gpus, notify, paths, scheduler
+from . import __version__, _proc, config, control, cpustat, db, gpus, notify, paths, scheduler
 
 log = logging.getLogger("gpushift.daemon")
 
@@ -256,6 +256,8 @@ class Daemon:
                 remaining=remaining,
             )
             jumped = [jid for jid, _ in starts if jid in res.moved]
+            for jid in jumped:
+                db.log_event(self.con, "moved", jid, note="ran ahead of job " + ", ".join(map(str, res.passed)))
             if jumped:
                 log.info(
                     "job %s runs ahead of job %s: saves %.0f min of waiting in total",
@@ -347,6 +349,11 @@ def main() -> int:
     _setup_logging()
     install_pylib()
     con = db.connect()
+    with db.tx(con):
+        last = db.get_kv(con, "daemon_heartbeat")
+        if last:
+            db.log_event(con, "daemon", new="stopped", t=last)
+        db.log_event(con, "daemon", new="started", note=f"gpushift {__version__}")
     db.set_kv(con, "daemon_pid", os.getpid())
     db.set_kv(con, "daemon_ctime", _proc.create_time(os.getpid()))
     db.set_kv(con, "daemon_started", time.time())

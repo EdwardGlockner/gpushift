@@ -526,6 +526,7 @@ def test_short_whole_machine_job_runs_before_a_long_one_gpu_job(q):
     q.wait_state(short, "done")
     q.wait_state(long, "running")
     q.gpushift("cancel", str(long))
-    from gpushift import paths
+    from gpushift import db, paths
 
     assert f"job {short} runs ahead of job {long}" in paths.daemon_log().read_text()
+    assert [e["note"] for e in db.events(q.con, short) if e["kind"] == "moved"] == [f"ran ahead of job {long}"]
