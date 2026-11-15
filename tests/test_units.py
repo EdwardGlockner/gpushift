@@ -127,14 +127,33 @@ def test_half_quoted_command_is_rejected():
     cli.check_program_name(["python run.py exp_a 1"])  # one shell string
 
 
-def test_time_left_unknown_once_overdue():
+def test_time_left_once_overdue():
     from gpushift import control
 
     j = {"eta_seconds": 600, "total_runtime": 0.0, "state": "running", "started_at": 1000.0}
     assert control.time_left(None, j, now=1100.0) == 500.0
-    assert control.time_left(None, j, now=1700.0) is None  # past its estimate: unknown
+    # past its estimate with no history: as long again as it has run, at least 5 min
+    assert control.time_left(None, j, now=1700.0) == 700.0
+    assert control.time_left(None, {**j, "eta_seconds": 60}, now=1100.0) == control.OVERRUN_MIN_SECONDS
     resumed = {"eta_seconds": 600, "total_runtime": 400.0, "state": "queued", "started_at": None}
     assert control.time_left(None, resumed, now=0.0) == 200.0
+
+
+def test_time_left_once_overdue_uses_longer_earlier_runs(tmp_path):
+    from gpushift import control, db
+
+    con = db.connect(tmp_path / "q.db")
+    for rt in (600, 600, 600, 1500, 2100, 2400):  # median 1050; three runs went past 1200 s
+        db.insert_job(
+            con, state="done", preset="one", n_gpus=1, slots=2, position=0.0, argv=["x"], command="x", cwd=".",
+            env={}, total_runtime=float(rt), ended_at=float(rt),
+        )  # fmt: skip
+    j = {"eta_seconds": None, "command": "x", "project": None, "total_runtime": 0.0, "state": "running",
+         "started_at": 10_000.0}  # fmt: skip
+    assert control.time_left(con, j, now=11_000.0) == 50.0  # still inside the median
+    assert control.time_left(con, j, now=11_200.0) == 900.0  # median of 300, 900, 1200 left
+    assert control.time_left(con, j, now=13_000.0) == 3000.0  # longer than any run: as long again
+    assert control.time_left(con, {**j, "command": "new"}, now=13_000.0) is None  # no estimate at all
 
 
 def test_time_spent_frozen_does_not_count_as_run_time():

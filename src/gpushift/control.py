@@ -341,15 +341,28 @@ def expected_duration(con, j: dict) -> float | None:
     return statistics.median(hist) if hist else None
 
 
+OVERRUN_MIN_SECONDS = 300.0  # least time left a job past its estimate counts as
+
+
 def time_left(con, j: dict, now: float | None = None) -> float | None:
     """Expected seconds until the job is done (for a queued job: its whole
     remaining run). Counts time it already ran before an eviction. None when
-    unknown: no estimate, or it has already run past its estimate."""
+    unknown (no estimate).
+
+    A job past its estimate still gets one, so jobs behind it can keep using
+    idle GPUs: the median time left of earlier runs that lasted at least this
+    long, or else as long again as it has run so far (at least
+    OVERRUN_MIN_SECONDS). It grows each time the job outlives it."""
     dur = expected_duration(con, j)
     if dur is None:
         return None
-    left = dur - ran(j, now)
-    return left if left > 0 else None
+    done = ran(j, now)
+    left = dur - done
+    if left > 0:
+        return left
+    longer = [h - done for h in db.history_runtimes(con, j["command"], j["project"], limit=50)] if con else []
+    longer = [x for x in longer if x > 0]
+    return max(statistics.median(longer) if longer else done, OVERRUN_MIN_SECONDS)
 
 
 FAIR_WINDOW = 24 * 3600  # how far back GPU time counts toward a session's share

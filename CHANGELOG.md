@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 (2026-11-15)
+
+- A job that runs longer than estimated no longer stops other jobs from using
+  idle GPUs. Its time left is estimated from earlier runs that lasted at least
+  as long, or else taken to be as long again as it has run so far.
+
 ## 0.1.4 (2026-11-15)
 
 - AMD GPUs on Linux and Windows (not macOS). Integrated graphics with less than

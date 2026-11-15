@@ -181,6 +181,23 @@ def test_no_idle_gpu_use_without_estimates():
     assert plan(queue, running, M2, durations={}, remaining={1: 600.0}) == []
 
 
+def test_overdue_running_job_still_lets_short_jobs_use_idle_gpus(tmp_path):
+    from gpushift import control, db
+
+    # Job 1 (est. 600 s) has run 900 s on GPU 0; a --two job waits behind it.
+    con = db.connect(tmp_path / "q.db")
+    common = dict(n_gpus=1, slots=2, argv=["x"], cwd=".", env={}, total_runtime=0.0)
+    db.insert_job(con, state="running", preset="one", position=0.0, command="a", eta_seconds=600, started_at=1000.0,
+                  gpus=[0], **common)  # fmt: skip
+    db.insert_job(con, state="queued", preset="two", position=1.0, command="b", eta_seconds=100,
+                  **(common | {"n_gpus": 2}))  # fmt: skip
+    db.insert_job(con, state="queued", preset="one", position=2.0, command="c", eta_seconds=300, **common)
+    left = control.time_left(con, db.get_job(con, 1), now=1900.0)
+    assert left == 900.0  # not unknown
+    running, remaining = [(one(1), [0])], {1: left}
+    assert plan([two(2), one(3)], running, M2, durations={3: 300.0}, remaining=remaining) == [(3, [1])]
+
+
 def test_waiting_one_job_reserves_its_gpu():
     # Both GPUs busy; job 3 (--one) waits for GPU 0 (free in 100 s).
     running, remaining = [(one(1), [0]), (light(2), [1])], {1: 100.0, 2: 5000.0}
