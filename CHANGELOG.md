@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-11-15)
 
 - AMD GPUs on Linux and Windows (not macOS). Integrated graphics with less than
   2 GB of dedicated memory are skipped.
