@@ -12,10 +12,10 @@ import subprocess
 import sys
 import time
 
-from . import _proc, control, db, paths
+from . import _proc, control, db, gpus, paths
 
 
-def _job_env(j: dict) -> dict[str, str]:
+def _job_env(j: dict, vendor: str = "nvidia") -> dict[str, str]:
     env = dict(j["env"])
     jid = j["id"]
     env["GPUSHIFT_JOB_ID"] = str(jid)
@@ -24,10 +24,8 @@ def _job_env(j: dict) -> dict[str, str]:
     env["GPUSHIFT_ATTEMPT"] = str(j["attempts"])
     env["GPUSHIFT_RESUME"] = "1" if j["resume"] else "0"
     env["GPUSHIFT_GPUS"] = ",".join(map(str, j["gpus"] or []))
-    # Make CUDA's device numbering match nvidia-smi's.
-    env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     if j["gpus"] or j["preset"] == "cpu" or j["n_gpus"] == 0:
-        env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, j["gpus"] or []))
+        gpus.visible_env(env, j["gpus"] or [], vendor)
     env.setdefault("PYTHONUNBUFFERED", "1")
     lib = str(paths.pylib_dir())
     pp = env.get("PYTHONPATH")
@@ -87,7 +85,7 @@ def run(job_id: int) -> int:
         db.update(con, job_id, runner_pid=os.getpid(), runner_ctime=me_ctime, attempts=j["attempts"] + 1)
         j = db.get_job(con, job_id)
 
-    env = _job_env(j)
+    env = _job_env(j, gpus.vendor())
     args, shell = _popen_args(j, env)
     started = time.time()
     with open(log, "ab", buffering=0) as out:

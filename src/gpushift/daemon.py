@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import _proc, config, control, cpustat, db, gpumem, gpus, notify, paths, scheduler
+from . import _proc, config, control, cpustat, db, gpus, notify, paths, scheduler
 
 log = logging.getLogger("gpushift.daemon")
 
@@ -173,8 +173,8 @@ class Daemon:
             db.set_kv(self.con, "gpu_state_at", now)
         except gpus.GPUQueryError as e:
             log.warning("%s", e)
-        self.procs = gpumem.per_process()
         self.read_job_processes()
+        self.procs = gpus.per_process(set().union(*self.job_pids.values()))
         self.measure_jobs()
         self.poll_cpu()
 

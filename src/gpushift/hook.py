@@ -133,6 +133,9 @@ def strip_prefixes(t: list[str]) -> tuple[list[str], dict[str, str]]:
     return t, env
 
 
+VISIBLE_VARS = ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES")
+
+
 def classify(seg: str, env_vars: set[str]) -> Verdict:
     t, env = strip_prefixes(tokens(seg))
     if not t:
@@ -144,7 +147,7 @@ def classify(seg: str, env_vars: set[str]) -> Verdict:
         return Verdict(False)
     if any(a in QUICK_FLAGS for a in args):
         return Verdict(False)
-    cvd = "CUDA_VISIBLE_DEVICES" in env or "CUDA_VISIBLE_DEVICES" in env_vars
+    cvd = next((v for v in VISIBLE_VARS if v in env or v in env_vars), None)
 
     def multi() -> str:
         joined = " ".join(args)
@@ -182,14 +185,14 @@ def classify(seg: str, env_vars: set[str]) -> Verdict:
             if TRAIN_NAME.search(mod.split(".")[-1]):
                 return Verdict(True, f"`python -m {mod}` looks like a training run", seg, "one")
             if cvd:
-                return Verdict(True, "it sets CUDA_VISIBLE_DEVICES and runs Python", seg, "one")
+                return Verdict(True, f"it sets {cvd} and runs Python", seg, "one")
             return Verdict(False)
         script = basename(args[i])
         stem = re.sub(r"\.py$", "", script)
         if script.endswith(".py") and TRAIN_NAME.search(stem):
             return Verdict(True, f"`{script}` looks like a training script", seg, "one")
         if cvd:
-            return Verdict(True, "it sets CUDA_VISIBLE_DEVICES and runs Python", seg, "one")
+            return Verdict(True, f"it sets {cvd} and runs Python", seg, "one")
     return Verdict(False)
 
 
