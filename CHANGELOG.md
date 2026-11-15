@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- gpushift keeps a history of each job: when it was queued, started, frozen,
+  evicted and ended, and why. Freeing and resuming the queue and daemon restarts
+  are kept too. `gpushift events [<id>]` shows it (`--json`: schema 1).
+
 ## 0.1.5 (2026-11-15)
 
 - A job that runs longer than estimated no longer stops other jobs from using

@@ -61,6 +61,48 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 """
 
+# History: one row per job state change, mode change, daemon start/stop and
+# queue move. Triggers write the first two, so changes made by any process, or
+# by an older gpushift, are logged. Columns the triggers read must exist in
+# every release.
+_NOW = "(julianday('now') - 2440587.5) * 86400.0"
+EVENTS = f"""
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    t REAL NOT NULL,
+    job_id INTEGER,                   -- NULL for mode and daemon events
+    kind TEXT NOT NULL,               -- state mode daemon moved retry
+    old TEXT,
+    new TEXT,
+    gpus TEXT,                        -- JSON list
+    runtime REAL,                     -- total_runtime, when this change updated it
+    exit_code INTEGER,
+    note TEXT                         -- the job's note, when this change set a new one
+);
+CREATE INDEX IF NOT EXISTS events_t ON events(t);
+CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
+CREATE TRIGGER IF NOT EXISTS events_job_added_v1 AFTER INSERT ON jobs BEGIN
+    INSERT INTO events(t, job_id, kind, new, note) VALUES ({_NOW}, NEW.id, 'state', NEW.state, NEW.note);
+END;
+CREATE TRIGGER IF NOT EXISTS events_job_state_v1 AFTER UPDATE OF state ON jobs
+WHEN OLD.state IS NOT NEW.state BEGIN
+    INSERT INTO events(t, job_id, kind, old, new, gpus, runtime, exit_code, note) VALUES (
+        {_NOW}, NEW.id, 'state', OLD.state, NEW.state, NEW.gpus,
+        CASE WHEN NEW.total_runtime IS NOT OLD.total_runtime THEN NEW.total_runtime END,
+        NEW.exit_code,
+        CASE WHEN NEW.note IS NOT OLD.note THEN NEW.note END
+    );
+END;
+CREATE TRIGGER IF NOT EXISTS events_mode_added_v1 AFTER INSERT ON kv
+WHEN NEW.key = 'mode' AND NEW.value IS NOT '"normal"' BEGIN
+    INSERT INTO events(t, kind, old, new) VALUES ({_NOW}, 'mode', 'normal', trim(NEW.value, '"'));
+END;
+CREATE TRIGGER IF NOT EXISTS events_mode_v1 AFTER UPDATE OF value ON kv
+WHEN NEW.key = 'mode' AND OLD.value IS NOT NEW.value BEGIN
+    INSERT INTO events(t, kind, old, new) VALUES ({_NOW}, 'mode', trim(OLD.value, '"'), trim(NEW.value, '"'));
+END;
+"""
+
 ACTIVE = ("running", "frozen", "evicting")
 FINAL = ("done", "failed", "cancelled")
 JSON_FIELDS = ("argv", "env", "gpus", "after_ids")
@@ -75,6 +117,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
     migrate(con)
+    con.executescript(EVENTS)
     return con
 
 
@@ -203,6 +246,23 @@ def insert_job(con, **fields) -> int:
     qs = ", ".join("?" * len(fields))
     cur = con.execute(f"INSERT INTO jobs({cols}) VALUES({qs})", list(fields.values()))
     return cur.lastrowid
+
+
+def log_event(con, kind: str, job_id: int | None = None, *, new=None, note=None, t: float | None = None) -> None:
+    con.execute(
+        f"INSERT INTO events(t, job_id, kind, new, note) VALUES(coalesce(?, {_NOW}), ?, ?, ?, ?)",
+        (t, job_id, kind, new, note),
+    )
+
+
+def events(con, job_id: int | None = None, limit: int | None = None) -> list[dict]:
+    """Events in time order: one job's, or everyone's. limit keeps the latest."""
+    where, args = ("WHERE job_id=?", [job_id]) if job_id is not None else ("", [])
+    rows = con.execute(
+        f"SELECT * FROM (SELECT * FROM events {where} ORDER BY t DESC, id DESC LIMIT ?) ORDER BY t, id",
+        [*args, -1 if limit is None else limit],
+    )
+    return [decode(r) for r in rows]
 
 
 def history_runtimes(con, command: str, project: str | None, limit: int = 10) -> list[float]:

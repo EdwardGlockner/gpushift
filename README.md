@@ -147,6 +147,7 @@ and [Lightning](examples/lightning_resumable.py).
 | `gpushift submit [preset] -- <cmd>` | Queue a job |
 | `gpushift status` / `gpushift ui` | See what's running and waiting |
 | `gpushift logs <id> -f` | Follow a job's output |
+| `gpushift events [<id>]` | What happened to a job, or the queue, and when |
 | `gpushift wait [<id>]` | Wait for a job (or the next of your jobs) to end |
 | `gpushift cancel <id>` / `gpushift retry <id>` | Cancel a job / run it again |
 | `gpushift priority <id>` | Move a job to the front |

@@ -89,6 +89,7 @@ def to_front(con, job_id: int) -> str:
         if problem:
             return problem
         db.update(con, job_id, position=db.front_position(con), prio=1)
+        db.log_event(con, "moved", job_id, note="moved to the front")
     return f"job {job_id} moved to the front of the queue"
 
 
@@ -578,6 +579,7 @@ def move(con, job_id: int, before: int | None) -> str:
             pos = (lo + hi) / 2
         up = at < old
         db.update(con, job_id, position=pos, prio=1 if up else 0)
+        db.log_event(con, "moved", job_id, note="moved to the end" if before is None else f"moved before job {before}")
     where = "the end" if before is None else f"before job {before}"
     return f"job {job_id} moved to {where}"
 

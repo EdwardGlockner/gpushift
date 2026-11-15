@@ -102,6 +102,7 @@ gpushift status --json     # stable schema (see below)
 gpushift logs <id>         # full output; -n 50 for the tail; -f to follow
 gpushift wait <id> --timeout 30m   # blocks; exit code mirrors the job's
 gpushift show <id> --json  # one job's details (state, exit_code, log path, note)
+gpushift events <id>       # what happened to it and when (started, evicted, frozen ...)
 gpushift cancel <id>       # your own jobs only, unless the user asks
 gpushift retry <id>        # requeue a copy of a failed job
 ```
