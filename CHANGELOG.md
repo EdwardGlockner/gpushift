@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 (2026-11-16)
+
+- The dashboard queue shows when each job is expected to start, and marks jobs
+  that start ahead of earlier ones, so it agrees with the timeline.
+
 ## 0.1.5 (2026-11-15)
 
 - A job that runs longer than estimated no longer stops other jobs from using

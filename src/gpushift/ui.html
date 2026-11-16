@@ -91,6 +91,7 @@ details.fold[open] > summary { margin-bottom: 8px; }
 .badge.frozen { color: var(--frozen); } .badge.evicting { color: var(--warn); }
 .badge.failed { color: var(--bad); } .badge.done { color: var(--good); } .badge.cancelled { color: var(--muted); }
 .badge.span { color: var(--muted); font-weight: 400; }
+.badge.ahead { color: var(--accent); font-weight: 400; margin-left: 4px; cursor: help; }
 .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -375,6 +376,19 @@ function timelineView(s) {
   return `<div class="tl">${axis}${rowHtml}${note ? `<div class="tl-note">${esc(note)}</div>` : ""}</div>`;
 }
 
+// When a queued job is expected to start, and which jobs before it in the
+// queue it starts ahead of (it is short enough to run first, see the timeline).
+function startsCell(j, queue, free) {
+  if (free) return '<span class="muted">paused</span>';
+  if (!j.est_start) return '<span class="muted">unknown</span>';
+  const t = Date.parse(j.est_start);
+  const passed = queue.filter((o) => o.turn < j.turn && (!o.est_start || Date.parse(o.est_start) > t)).map((o) => o.id);
+  const when = t <= Date.now() + 60e3 ? "now" : "~" + clock(j.est_start);
+  if (!passed.length) return when;
+  const tip = `Starts before job ${passed.join(", ")}: it is done or out of the way in time, so it costs them little or nothing.`;
+  return `${when} <span class="badge ahead" title="${esc(tip)}">ahead of ${passed.join(", ")}</span>`;
+}
+
 function render(s) {
   const free = s.mode !== "normal";
   const mode = $("mode");
@@ -396,11 +410,12 @@ function render(s) {
   $("qhead").textContent = `Queue (${s.queue.length} waiting)`;
   const queue = [...s.queue].sort((a, b) => a.turn - b.turn);
   $("queue").innerHTML = queue.length ? `<div class="table"><table><thead><tr><th></th><th>#</th><th>Job</th><th>Who</th><th>Preset</th>
-    <th>Queued</th><th>Takes</th><th>Command</th><th></th></tr></thead><tbody>${queue.map((j) => `<tr draggable="true" data-id="${j.id}">
+    <th>Queued</th><th>Takes</th><th>Starts</th><th>Command</th><th></th></tr></thead><tbody>${queue.map((j) => `<tr draggable="true" data-id="${j.id}">
       <td class="gripcell"><button class="grip" data-grip="${j.id}" type="button" title="Drag to move it in the queue (or focus it and use the arrow keys)" aria-label="Move job ${j.id}">⠿</button></td>
       <td>${j.turn}</td><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}${j.resume ? " · resumes" : ""}${j.waiting_for && j.waiting_for.length ? ` · after ${j.waiting_for.join(", ")}` : ""}</span></td>
       <td>${esc(who(j))}</td><td>${esc(j.preset)}</td><td title="${esc(ago(j.submitted_at))}">${clock(j.submitted_at)}</td>
       <td>${j.expected_duration_s ? "~" + dur(j.expected_duration_s) : '<span class="muted">unknown</span>'}</td>
+      <td>${startsCell(j, queue, free)}</td>
       <td class="cmd" title="${esc(j.command)}">${esc(j.command)}</td>
       <td class="actions">${cancelBtn(j)}</td></tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">Nothing waiting.</div>';
