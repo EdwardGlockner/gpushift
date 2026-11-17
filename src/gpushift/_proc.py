@@ -134,12 +134,41 @@ def suspend_tree(pid: int | None, ctime: float | None = None) -> bool:
     if p is None:
         return False
     # Parent first so it cannot spawn new children while we work down the tree.
-    for q in tree(p):
+    procs = tree(p)
+    for q in procs:
         try:
             q.suspend()
         except psutil.Error:
             pass
+    # Once everything is paused, hand the frozen job's RAM back to the user.
+    for q in procs:
+        trim_memory(q.pid)
     return True
+
+
+def trim_memory(pid: int) -> bool:
+    """Ask Windows to move a process's resident pages out of RAM (file-backed
+    pages are dropped, the rest go to the page file). Nothing is lost: pages
+    fault back in when the process runs again. Locked pages (e.g. CUDA pinned
+    buffers) simply stay. Best effort; a no-op off Windows."""
+    if not IS_WINDOWS:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    k32.K32EmptyWorkingSet.argtypes = (wintypes.HANDLE,)
+    access = 0x0400 | 0x0100  # PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA
+    h = k32.OpenProcess(access, False, pid)
+    if not h:
+        return False
+    try:
+        return bool(k32.K32EmptyWorkingSet(h))
+    finally:
+        k32.CloseHandle(h)
 
 
 def resume_tree(pid: int | None, ctime: float | None = None) -> bool:
