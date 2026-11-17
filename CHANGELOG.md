@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 (2026-11-18)
 
 - A `--light` job no longer waits while a `--one` job holds the shared GPU; it
   runs on an idle GPU instead.
