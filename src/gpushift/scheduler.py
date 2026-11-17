@@ -6,7 +6,8 @@ Resource model
 * Slots: a machine-wide concurrency budget (``slots`` in the config).
 * GPUs: a non-shared job claims its GPUs exclusively. ``--light`` jobs share
   the configured shared GPU with each other, but never with a non-shared job
-  (so a light eval cannot OOM a training run).
+  (so a light eval cannot OOM a training run). If a non-shared job holds the
+  shared GPU, light jobs use an idle GPU instead of waiting.
 * ``--exclusive`` needs every slot, i.e. nothing else may run.
 
 Starvation guard (in-order head with reservations)
@@ -163,9 +164,21 @@ class Usage:
             return list(m.gpus)
         if req.shared:
             g = m.shared_gpu
-            if g is None or g in self.heavy or g in self.packed:
+            if g is not None and g not in self.heavy and g not in self.packed:
+                return [g]
+            # Shared GPU taken by a non-light job: use another GPU that only
+            # light jobs are on, else an idle one, rather than wait.
+            if g is None:
                 return None
-            return [g]
+            spare = [
+                h
+                for h in m.gpus
+                if h not in self.heavy
+                and h not in self.packed
+                and (self.light.get(h) or m.mem_ok is None or h in m.mem_ok)
+            ]
+            spare.sort(key=lambda h: (not self.light.get(h), h))
+            return spare[:1] or None
         if req.n_gpus == 0:
             return []
         if self.packable(req):

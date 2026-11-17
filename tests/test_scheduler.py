@@ -90,6 +90,17 @@ def test_light_jobs_share_but_never_with_heavy():
     assert plan([one(3)], [(light(1), [1]), (one(2), [0])], M2) == []
 
 
+def test_light_falls_back_to_idle_gpu_when_shared_is_held():
+    # --one job holds the shared GPU, GPU 0 idle -> light job runs on GPU 0
+    assert plan([light(2)], [(one(1), [1])], M2) == [(2, [0])]
+    # a second light job stacks onto the same fallback GPU
+    assert plan([light(2), light(3)], [(one(1), [1])], M2) == [(2, [0]), (3, [0])]
+    # the fallback GPU must pass the memory threshold
+    assert plan([light(2)], [(one(1), [1])], Machine([0, 1], 1, 4, mem_ok={1})) == []
+    # a light job on GPU 0 keeps --one jobs off it, like on the shared GPU
+    assert plan([one(3)], [(one(1), [1]), (light(2), [0])], M2) == []
+
+
 def test_slots_limit():
     # two --one jobs use all 4 slots -> cpu job waits
     assert plan([cpu(3)], [(one(1), [0]), (one(2), [1])], M2) == []
