@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import __version__, autostart, config, control, daemon, db, gpus, notify, paths
 from ._proc import NO_WINDOW
-from .scheduler import PRESETS, PresetError, preset_requirements
+from .scheduler import PRESETS, RAM_UNKNOWN_MB, PresetError, preset_requirements
 
 
 class CLIError(Exception):
@@ -121,6 +121,8 @@ def job_public(con, j: dict) -> dict:
         "restartable": bool(j["restartable"]),
         "vram_mb": j["vram_mb"],
         "peak_vram_mb": j["peak_vram_mb"],
+        "ram_mb": j.get("ram_mb"),
+        "peak_ram_mb": j.get("peak_ram_mb"),
         "evictions": j["evictions"],
         "resume": bool(j["resume"]),
         "after": j.get("after_ids") or [],
@@ -288,6 +290,7 @@ def cmd_submit(a) -> int:
             resumable=int(a.resumable),
             restartable=int(a.restartable),
             vram_mb=parse_size(a.vram) if a.vram else None,
+            ram_mb=parse_size(a.ram) if a.ram else None,
             after_ids=after or None,
         )
     paths.job_dir(jid).mkdir(parents=True, exist_ok=True)
@@ -416,6 +419,7 @@ def status_data(con, cfg) -> dict:
             "heartbeat_age_s": None if hb is None else round(time.time() - hb, 1),
         },
         "slots": {"total": cfg.slots, "used": sum(j["slots"] for j in running)},
+        "ram": ram_status(con, cfg, running),
         "gpus": gpu_rows,
         "running": [job_public(con, j) for j in running],
         "queue": q,
@@ -424,6 +428,20 @@ def status_data(con, cfg) -> dict:
         "timeline": timeline(con, running, queue, placed),
         "_est": est,
     }
+
+
+def ram_status(con, cfg, running: list[dict]) -> dict | None:
+    """RAM booked by running jobs against what jobs may book (None when the
+    RAM check is off or the daemon has no recent reading)."""
+    budget = control.daemon_ram(con) if cfg.ram_aware else None
+    if budget is None:
+        return None
+    job_ram = {int(k): v for k, v in (db.get_kv(con, "job_ram") or {}).items()}
+    booked = 0
+    for j in running:
+        b = control.ram_booked(control.ram_need(con, j), j, job_ram.get(j["id"]))
+        booked += RAM_UNKNOWN_MB if b is None else b
+    return {"booked_mb": booked, "budget_mb": budget, "in_use_mb": sum(job_ram.values())}
 
 
 def cmd_status(a) -> int:
@@ -441,7 +459,11 @@ def cmd_status(a) -> int:
         "soft": "FREE --soft (queue paused, jobs frozen)",
     }[mode]
     dm = "running" if s["daemon"]["running"] else "NOT RUNNING (`gpushift start`)"
-    print(f"gpushift  mode: {mode_txt}  |  daemon: {dm}  |  slots: {s['slots']['used']}/{s['slots']['total']} used")
+    ram = s["ram"]
+    ram_txt = f"  |  RAM booked: {ram['booked_mb'] / 1024:.1f}/{ram['budget_mb'] / 1024:.1f} GB" if ram else ""
+    print(
+        f"gpushift  mode: {mode_txt}  |  daemon: {dm}  |  slots: {s['slots']['used']}/{s['slots']['total']} used{ram_txt}"
+    )
     print()
     by_id = {j["id"]: j for j in s["running"]}
 
@@ -572,6 +594,7 @@ def cmd_retry(a) -> int:
             "resumable",
             "restartable",
             "vram_mb",
+            "ram_mb",
         )
         jid = db.insert_job(
             con,
@@ -1008,6 +1031,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--vram",
         help="GPU memory the job needs per GPU, e.g. 6G or 500M. Jobs with a known need may share a GPU "
         "(gpushift also learns it from earlier runs of the same command)",
+    )
+    s.add_argument(
+        "--ram",
+        help="RAM the job needs at its peak, e.g. 12G. Jobs only start when their RAM fits "
+        "(gpushift also learns it from earlier runs of the same command; 2G is assumed if unknown)",
     )
     s.add_argument(
         "--restartable",

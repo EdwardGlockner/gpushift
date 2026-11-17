@@ -278,6 +278,51 @@ def test_a_job_that_cannot_fit_now_holds_nothing_back():
     assert plan([two(2), one(3)], [], m) == [(3, [1])]
 
 
+# ------------------------------------------------------------ RAM
+
+
+def ram(req, mb):
+    return Req(req.id, req.n_gpus, req.slots, req.exclusive, req.shared, req.vram, mb)
+
+
+MR = Machine(gpus=[0, 1], shared_gpu=1, slots=6, ram=20000)  # 20 GB jobs may book
+
+
+def test_idle_gpu_gets_a_job_when_ram_allows():
+    # The case that left GPU 1 idle: a --one job and two CPU jobs run. With 6
+    # slots the next --one job fits, and starts if its RAM fits too.
+    running = [(ram(one(1), 6000), [0]), (ram(cpu(2), 3000), []), (ram(cpu(3), 3000), [])]
+    assert plan([ram(one(4), 6000)], running, MR) == [(4, [1])]
+    assert plan([ram(one(4), 9000)], running, MR) == []  # 21 GB > 20 GB: waits
+    assert plan([ram(one(4), 9000)], running, Machine([0, 1], 1, 6)) == [(4, [1])]  # RAM check off
+
+
+def test_unknown_ram_need_counts_as_default():
+    from gpushift.scheduler import RAM_UNKNOWN_MB
+
+    m = Machine(gpus=[0, 1], shared_gpu=1, slots=6, ram=3 * RAM_UNKNOWN_MB)
+    # Three unknown CPU jobs fit, the fourth doesn't.
+    assert [i for i, _ in plan([cpu(i) for i in range(1, 5)], [], m)] == [1, 2, 3]
+
+
+def test_ram_wait_is_forecast_and_reserves():
+    # Job 1 holds 15 GB for 600 s; job 2 needs 10 GB, so it starts when job 1 ends.
+    running = [(ram(one(1), 15000), [0], 600.0)]
+    est = simulate([(ram(one(2), 10000), 300.0)], running, MR)
+    assert est[2] == 600.0
+    # While job 2 waits for RAM, a long job behind it may not take the RAM...
+    queue = [ram(one(2), 10000), ram(cpu(3), 4000)]
+    rem = {1: 600.0}
+    assert plan(queue, [(r, g) for r, g, _ in running], MR, durations={3: 5000.0}, remaining=rem) == []
+    # ... but a short one that ends before job 1 does may.
+    assert plan(queue, [(r, g) for r, g, _ in running], MR, durations={3: 100.0}, remaining=rem) == [(3, [])]
+
+
+def test_a_job_needing_more_ram_than_there_is_holds_nothing_back():
+    running = [(ram(one(1), 2000), [0])]
+    assert plan([ram(one(2), 30000), ram(one(3), 2000)], running, MR) == [(3, [1])]
+
+
 # ------------------------------------------------------------ running jobs ahead of their turn
 
 H = 3600.0

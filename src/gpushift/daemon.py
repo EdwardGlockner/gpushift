@@ -139,6 +139,7 @@ class Daemon:
         self.last_gpu_poll = 0.0
         self.procs: dict[int, int] | None = None  # pid -> GPU MiB, from the last poll
         self.capacity: dict[int, int] | None = None  # MiB per GPU packed jobs may book
+        self.ram: int | None = None  # MiB of RAM jobs may book in total
         self.cpu: cpustat.Sampler | None = None  # made when a dashboard first asks (slow to set up on Windows)
         self.snap: _proc.Snapshot | None = None  # process tree, taken once per poll
         self.job_pids: dict[int, set[int]] = {}  # job id -> its processes (runner and job), per poll
@@ -174,6 +175,7 @@ class Daemon:
         except gpus.GPUQueryError as e:
             log.warning("%s", e)
         self.read_job_processes()
+        self.measure_ram()
         self.procs = gpus.per_process(set().union(*self.job_pids.values()))
         self.measure_jobs()
         self.poll_cpu()
@@ -234,11 +236,35 @@ class Daemon:
         self.capacity = control.pack_capacity(self.gpu_state, job_vram, active)
         db.set_kv(self.con, "pack_capacity", self.capacity)
 
+    def measure_ram(self) -> None:
+        """Record how much RAM each active job uses (and its peak while running),
+        and how much RAM is left for jobs to book."""
+        try:
+            total, used = _proc.system_memory()
+            # job_ram (private) is what jobs need; resident also covers their
+            # mapped files, which count neither as booked nor as other programs' use.
+            resident, job_ram, peaks = {}, {}, {}
+            for jid, pids in self.job_pids.items():
+                if pids:
+                    resident[jid], job_ram[jid], peaks[jid] = _proc.tree_memory(pids)
+            for j in db.active(self.con):
+                peak = peaks.get(j["id"], 0)
+                if j["state"] == "running" and peak > (j["peak_ram_mb"] or 0):
+                    with db.tx(self.con):
+                        db.update(self.con, j["id"], peak_ram_mb=peak)
+            self.ram = control.ram_capacity(total, used, resident, self.cfg.ram_reserve_perc)
+        except Exception:  # never let a reading stop the scheduler
+            log.exception("RAM reading failed")
+            self.ram, job_ram = None, {}
+        db.set_kv(self.con, "job_ram", job_ram)
+        db.set_kv(self.con, "ram_capacity", self.ram)
+        db.set_kv(self.con, "ram_capacity_at", time.time())
+
     def mem_ok(self) -> set[int] | None:
         return control.mem_ok(self.cfg, self.gpu_state)
 
     def schedule(self) -> None:
-        machine = control.machine_from_config(self.cfg, self.mem_ok(), self.capacity)
+        machine = control.machine_from_config(self.cfg, self.mem_ok(), self.capacity, self.ram)
         now = time.time()
         with db.tx(self.con):
             if db.get_mode(self.con) != "normal":

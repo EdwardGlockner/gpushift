@@ -36,6 +36,8 @@ class Config:
     starvation_guard: bool = True
     fair_share: bool = False  # sessions take turns instead of first come, first served
     packing: bool = True  # jobs with a known GPU memory need may share a GPU
+    ram_aware: bool = True  # jobs only start if their expected peak RAM fits
+    ram_reserve_perc: int = 10  # % of RAM jobs never book, kept free as headroom
     reorder_slack: int = 3600  # seconds a job may be passed to cut total waiting; 0 = off
     free_mode_default: str = "full"  # full | soft
     evict_timeout: int = 300  # seconds a resumable job gets to checkpoint before it is frozen
@@ -52,7 +54,7 @@ class Config:
 
 def default_slots(n_gpus: int) -> int:
     if n_gpus:
-        return 2 * n_gpus
+        return 3 * n_gpus
     return max(1, (os.cpu_count() or 2) // 2)
 
 
@@ -107,6 +109,10 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
     if not isinstance(evict_timeout, int) or evict_timeout < 1:
         raise ConfigError("evict_timeout must be a positive number of seconds")
 
+    reserve = raw.get("ram_reserve_perc", 10)
+    if not isinstance(reserve, int) or not 0 <= reserve <= 90:
+        raise ConfigError("ram_reserve_perc must be an integer between 0 and 90")
+
     reorder_slack = raw.get("reorder_slack", 3600)
     if not isinstance(reorder_slack, int) or reorder_slack < 0:
         raise ConfigError("reorder_slack must be a whole number of seconds >= 0 (0 turns reordering off)")
@@ -134,6 +140,8 @@ def load(detected: list[gpus_mod.GPU] | None = None) -> Config:
         starvation_guard=bool(raw.get("starvation_guard", True)),
         fair_share=bool(raw.get("fair_share", False)),
         packing=bool(raw.get("packing", True)),
+        ram_aware=bool(raw.get("ram_aware", True)),
+        ram_reserve_perc=reserve,
         reorder_slack=reorder_slack,
         free_mode_default=mode,
         evict_timeout=evict_timeout,
@@ -162,7 +170,8 @@ def template(detected: list[gpus_mod.GPU]) -> str:
 # gpus = {idx}
 
 # Total slots: the machine's concurrency budget. --light/--cpu use 1,
-# --one/--two use 2, --exclusive uses all. Default: 2 per GPU.
+# --one/--two use 2, --exclusive uses all. Default: 3 per GPU. RAM is checked
+# separately (ram_aware), so slots only need to cap how many jobs share the CPU.
 # slots = {default_slots(len(idx))}
 
 # GPU that --light jobs share. Default: the last GPU.
@@ -193,6 +202,14 @@ def template(detected: list[gpus_mod.GPU]) -> str:
 # true: a job whose GPU memory need is known (--vram, or learned from earlier
 # runs of the same command) may share a GPU with other such jobs if they fit.
 # packing = true
+
+# true: a job only starts if the RAM it is expected to need at its peak (--ram,
+# or learned from earlier runs of the same command; 2 GB if unknown) fits
+# beside what running jobs have booked and what other programs use.
+# ram_aware = true
+
+# % of RAM that jobs never book, kept free for the desktop and surprises.
+# ram_reserve_perc = 10
 
 # A job may run ahead of its turn when that cuts the total waiting, e.g. a
 # short whole-machine job before a long one-GPU job. No job is pushed back by

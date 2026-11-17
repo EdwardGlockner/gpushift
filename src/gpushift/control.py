@@ -9,15 +9,17 @@ import statistics
 import time
 
 from . import _proc, db, paths
-from .scheduler import Machine, Req, reorder, simulate
+from .scheduler import RAM_UNKNOWN_MB, Machine, Req, reorder, simulate
 
 # ---------------------------------------------------------------- helpers
 
 
 def req_of(j: dict) -> Req:
     """The scheduler's view of a job. ``j["vram_need"]`` (set by plan_inputs)
-    makes it packable."""
-    return Req(j["id"], j["n_gpus"], j["slots"], bool(j["exclusive"]), bool(j["shared"]), j.get("vram_need"))
+    makes it packable; ``j["ram_need"]`` is the RAM it is booked at."""
+    return Req(
+        j["id"], j["n_gpus"], j["slots"], bool(j["exclusive"]), bool(j["shared"]), j.get("vram_need"), j.get("ram_need")
+    )
 
 
 PACK_MARGIN = 1.15  # learned memory needs get 15% ...
@@ -40,6 +42,31 @@ def vram_need(con, j: dict) -> int | None:
         return None
     peak = max(r["peak_vram_mb"] for r in rows) / j["n_gpus"]
     return int(peak * PACK_MARGIN + PACK_EXTRA_MB)
+
+
+def ram_need(con, j: dict) -> int | None:
+    """MiB of RAM the job needs at its peak: --ram, or learned from the peaks
+    of earlier successful runs of the same command. None if unknown."""
+    if j.get("ram_mb"):
+        return int(j["ram_mb"])
+    rows = con.execute(
+        "SELECT peak_ram_mb FROM jobs WHERE state='done' AND command=? AND project IS ? AND peak_ram_mb > 0 "
+        "ORDER BY ended_at DESC LIMIT 5",
+        (j["command"], j["project"]),
+    ).fetchall()
+    if not rows:
+        return None
+    return int(max(r["peak_ram_mb"] for r in rows) * PACK_MARGIN + PACK_EXTRA_MB)
+
+
+def ram_booked(need: int | None, j: dict, now_mb: int | None) -> int | None:
+    """RAM a running job is booked at: its expected need, but never less than
+    what it uses now or already used at its peak in this run (a job with no
+    known need is booked at least RAM_UNKNOWN_MB, since it may still grow)."""
+    seen = max(now_mb or 0, j.get("peak_ram_mb") or 0)
+    if need is None:
+        return max(seen, RAM_UNKNOWN_MB) if seen else None
+    return max(need, seen)
 
 
 def is_resumable(j: dict) -> bool:
@@ -458,8 +485,12 @@ def plan_inputs(con, now: float | None = None, fair: bool = False):
     scheduler uses, and what queued jobs still wait for (--after)."""
     now = time.time() if now is None else now
     active, queued = db.active(con), ordered_queue(con, fair, now)
+    job_ram = {int(k): v for k, v in (db.get_kv(con, "job_ram") or {}).items()}
     for j in active + queued:
         j["vram_need"] = vram_need(con, j)
+        j["ram_need"] = ram_need(con, j)
+    for j in active:
+        j["ram_need"] = ram_booked(j["ram_need"], j, job_ram.get(j["id"]))
     running = [(req_of(j), j["gpus"] or []) for j in active]
     remaining = {j["id"]: time_left(con, j, now) for j in active}
     durations = {j["id"]: time_left(con, j, now) for j in queued}
@@ -594,8 +625,25 @@ def promise(con, res, now: float) -> None:
         db.set_kv(con, "reorder_limits", {str(k): v for k, v in new.items()} or None)
 
 
-def machine_from_config(cfg, mem_ok: set[int] | None = None, capacity: dict[int, int] | None = None) -> Machine:
-    return Machine(list(cfg.gpus), cfg.shared_gpu, cfg.slots, mem_ok, capacity if cfg.packing else None)
+def machine_from_config(
+    cfg, mem_ok: set[int] | None = None, capacity: dict[int, int] | None = None, ram: int | None = None
+) -> Machine:
+    return Machine(
+        list(cfg.gpus),
+        cfg.shared_gpu,
+        cfg.slots,
+        mem_ok,
+        capacity if cfg.packing else None,
+        ram if cfg.ram_aware else None,
+    )
+
+
+def ram_capacity(total_mb: int, used_mb: int, job_ram: dict[int, int], reserve_perc: int) -> int:
+    """MiB of RAM gpushift jobs may book: total RAM minus what programs outside
+    gpushift use (RAM in use minus everything the jobs hold resident, mapped
+    files included) minus the reserve."""
+    outside = max(0, used_mb - sum(job_ram.values()))
+    return max(0, int(total_mb * (100 - reserve_perc) / 100) - outside)
 
 
 def pack_capacity(live, job_vram: dict[int, int], active: list[dict]) -> dict[int, int] | None:
@@ -647,7 +695,14 @@ def cpu_reading(con) -> dict | None:
 
 def live_machine(cfg, con=None) -> Machine:
     con = con or db.connect()
-    return machine_from_config(cfg, mem_ok(cfg, gpu_readings(con)), _daemon_capacity(con))
+    return machine_from_config(cfg, mem_ok(cfg, gpu_readings(con)), _daemon_capacity(con), daemon_ram(con))
+
+
+def daemon_ram(con) -> int | None:
+    """The RAM budget the daemon measured last, if recent (None: unknown, so
+    estimates don't hold jobs back on a stale reading)."""
+    at = db.get_kv(con, "ram_capacity_at")
+    return db.get_kv(con, "ram_capacity") if at and time.time() - at < GPU_READING_MAX_AGE else None
 
 
 def _daemon_capacity(con) -> dict[int, int] | None:

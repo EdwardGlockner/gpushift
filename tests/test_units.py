@@ -33,10 +33,10 @@ def test_config_defaults_scale(tmp_path, monkeypatch):
 
     two = [GPU(0, "a", 8192, 0), GPU(1, "b", 6144, 0)]
     c = config.load(two)
-    assert (c.gpus, c.slots, c.shared_gpu) == ([0, 1], 4, 1)
+    assert (c.gpus, c.slots, c.shared_gpu) == ([0, 1], 6, 1)
     four = [GPU(i, "x", 1, 0) for i in range(4)]
     c = config.load(four)
-    assert (c.slots, c.shared_gpu) == (8, 3)
+    assert (c.slots, c.shared_gpu) == (12, 3)
     c = config.load([])
     assert c.gpus == [] and c.shared_gpu is None and c.slots >= 1
 
@@ -47,10 +47,10 @@ def test_config_file_and_validation(tmp_path, monkeypatch):
 
     two = [GPU(0, "a", 8192, 0), GPU(1, "b", 6144, 0)]
     (tmp_path / "config.toml").write_text(config.template(two))
-    assert config.load(two).slots == 4  # template is all comments
-    (tmp_path / "config.toml").write_text("slots = 6\nshared_gpu = 0\n[hook]\nallow = ['x']\n")
+    assert config.load(two).slots == 6  # template is all comments
+    (tmp_path / "config.toml").write_text("slots = 5\nshared_gpu = 0\n[hook]\nallow = ['x']\n")
     c = config.load(two)
-    assert (c.slots, c.shared_gpu, c.hook.allow) == (6, 0, ["x"])
+    assert (c.slots, c.shared_gpu, c.hook.allow) == (5, 0, ["x"])
     (tmp_path / "config.toml").write_text("shared_gpu = 5\n")
     with pytest.raises(config.ConfigError):
         config.load(two)
@@ -154,6 +154,31 @@ def test_time_left_once_overdue_uses_longer_earlier_runs(tmp_path):
     assert control.time_left(con, j, now=11_200.0) == 900.0  # median of 300, 900, 1200 left
     assert control.time_left(con, j, now=13_000.0) == 3000.0  # longer than any run: as long again
     assert control.time_left(con, {**j, "command": "new"}, now=13_000.0) is None  # no estimate at all
+
+
+def test_ram_need_booking_and_budget(tmp_path):
+    from gpushift import control, db
+    from gpushift.scheduler import RAM_UNKNOWN_MB
+
+    con = db.connect(tmp_path / "q.db")
+    for peak in (3000, 5000):
+        db.insert_job(
+            con, state="done", preset="cpu", n_gpus=0, slots=1, position=0.0, argv=["x"], command="x", cwd=".",
+            env={}, peak_ram_mb=peak, ended_at=1.0,
+        )  # fmt: skip
+    j = {"command": "x", "project": None}
+    assert control.ram_need(con, j) == int(5000 * control.PACK_MARGIN + control.PACK_EXTRA_MB)
+    assert control.ram_need(con, {**j, "ram_mb": 12000}) == 12000  # --ram wins
+    assert control.ram_need(con, {**j, "command": "new"}) is None
+    # Running jobs: never booked below what they use or already peaked at.
+    assert control.ram_booked(4000, {"peak_ram_mb": 7000}, 1000) == 7000
+    assert control.ram_booked(4000, {"peak_ram_mb": None}, 1000) == 4000
+    assert control.ram_booked(None, {"peak_ram_mb": None}, 500) == RAM_UNKNOWN_MB  # may still grow
+    assert control.ram_booked(None, {"peak_ram_mb": None}, 9000) == 9000
+    assert control.ram_booked(None, {"peak_ram_mb": None}, None) is None
+    # 32 GB, 20 GB in use of which jobs use 12 GB: 8 GB is other programs; 10% reserve.
+    assert control.ram_capacity(32000, 20000, {1: 8000, 2: 4000}, 10) == 28800 - 8000
+    assert control.ram_capacity(32000, 31000, {}, 10) == 0
 
 
 def test_time_spent_frozen_does_not_count_as_run_time():

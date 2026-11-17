@@ -91,6 +91,7 @@ def test_priority_and_swap(q):
 
 
 def test_free_full_evicts_resumable_and_freezes_rest(q, tmp_path):
+    q.write_config("slots = 4\n")  # the two --one jobs fill it, so `later` waits
     res = q.submit("--one", *counter(tmp_path / "c", 150))
     plain = q.submit("--one", *ticker())
     later = q.submit("--cpu", "--", PY, "-c", "print('ran')")
@@ -468,6 +469,44 @@ def test_memory_need_is_learned_from_earlier_runs(q):
     second = q.submit("--one", *cmd)
     need = control.vram_need(q.con, q.job(second))
     assert need == int(2000 * control.PACK_MARGIN + control.PACK_EXTRA_MB)
+
+
+def test_jobs_wait_for_ram(q):
+    # 10 GB of RAM, none of it in use, no reserve: a second 6 GB job waits
+    # for the first even though GPU 1 is free.
+    q.kill_daemon()
+    q.env["GPUSHIFT_FAKE_RAM"] = "10000,0"
+    q.write_config("ram_reserve_perc = 0\n")
+    q.start()
+    first = q.submit("--one", "--ram", "6G", *ticker(40))
+    second = q.submit("--one", "--ram", "6G", *ticker(40))
+    q.wait_state(first, "running")
+    time.sleep(1.5)
+    assert q.state(second) == "queued"
+    s = json.loads(q.gpushift("status", "--json").stdout)
+    assert s["ram"]["booked_mb"] >= 6144 and s["ram"]["budget_mb"] <= 10000
+    q.wait_state(second, "running", timeout=30)  # once the first is done
+
+
+def test_ram_peak_is_recorded(q):
+    big = "x = bytearray(200 * 2**20); import time; time.sleep(3)"
+    jid = q.submit("--cpu", "--", PY, "-c", big)
+    q.wait_state(jid, "done", timeout=30)
+    assert q.job(jid)["peak_ram_mb"] >= 200
+
+
+def test_memory_mapped_files_are_not_booked(q, tmp_path):
+    # Reading a 300 MB file through mmap fills the working set, but the OS can
+    # drop those pages any time: they are not RAM the job needs.
+    data = tmp_path / "data.bin"
+    data.write_bytes(os.urandom(300 * 2**20))
+    script = (
+        f"import mmap, time\nf = open({str(data)!r}, 'rb')\nm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)\n"
+        "s = sum(m[i] for i in range(0, len(m), 4096))\ntime.sleep(3)\n"
+    )
+    jid = q.submit("--cpu", "--", PY, "-c", script)
+    q.wait_state(jid, "done", timeout=60)
+    assert 0 < q.job(jid)["peak_ram_mb"] < 150
 
 
 def test_dashboard(q, tmp_path):

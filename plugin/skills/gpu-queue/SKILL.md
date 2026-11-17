@@ -53,6 +53,9 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
     fine-tune measured before). Jobs with a known need can share a GPU instead of
     waiting for a whole one. gpushift also learns it from earlier runs of the same
     command, so don't guess wildly: an underestimate can make a job run out of memory.
+    Likewise **`--ram 12G`** for a job that needs a lot of RAM: a job only starts
+    when its RAM fits beside the running jobs (unknown jobs count as 2 GB until
+    gpushift has seen one run of them).
 
 ## Choosing a preset
 

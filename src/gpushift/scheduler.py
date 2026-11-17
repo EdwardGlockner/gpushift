@@ -9,11 +9,15 @@ Resource model
   (so a light eval cannot OOM a training run). If a non-shared job holds the
   shared GPU, light jobs use an idle GPU instead of waiting.
 * ``--exclusive`` needs every slot, i.e. nothing else may run.
+* RAM (when the machine reports a budget): a job starts only if its expected
+  peak RAM fits beside what running jobs have booked. Jobs with no known need
+  count as RAM_UNKNOWN_MB.
 
 Starvation guard (in-order head with reservations)
 --------------------------------------------------
 * A waiting multi-GPU or exclusive job holds back every job behind it.
 * A waiting 1-GPU job holds back the GPU jobs behind it; CPU jobs may pass.
+* A job waiting for RAM holds back every job behind it (they all take RAM).
 * A held-back job may still start on idle resources if it fits now and its
   expected duration says it ends before the waiting job could start anyway
   (when the running jobs it waits for are expected to end). Jobs without an
@@ -55,6 +59,7 @@ class Req:
     exclusive: bool = False
     shared: bool = False
     vram: int | None = None  # MiB needed per GPU, if known (makes the job packable)
+    ram: int | None = None  # MiB of RAM it needs at its peak (None: unknown, counts as RAM_UNKNOWN_MB)
 
     @property
     def barrier(self) -> bool:
@@ -74,6 +79,16 @@ class Machine:
     # MiB per GPU that packed jobs may book (memory minus use outside gpushift);
     # None turns packing off.
     capacity: dict[int, int] | None = None
+    # MiB of RAM gpushift jobs may book in total (RAM minus use outside
+    # gpushift minus a reserve); None turns the RAM check off.
+    ram: int | None = None
+
+
+RAM_UNKNOWN_MB = 2048  # RAM a job with no known need is booked at
+
+
+def ram_of(req: Req) -> int:
+    return req.ram if req.ram is not None else RAM_UNKNOWN_MB
 
 
 def preset_requirements(
@@ -125,6 +140,7 @@ class Usage:
     def __init__(self, m: Machine):
         self.m = m
         self.slots = 0
+        self.ram = 0  # MiB booked by running jobs
         self.count = 0
         self.heavy: set[int] = set()  # GPUs held whole by one job
         self.light: dict[int, int] = {}  # GPU -> number of --light jobs on it
@@ -141,6 +157,7 @@ class Usage:
 
     def add(self, req: Req, gpus: list[int]) -> None:
         self.slots += self.cost(req)
+        self.ram += ram_of(req)
         self.count += 1
         self.exclusive = self.exclusive or req.exclusive
         for g in gpus:
@@ -151,10 +168,16 @@ class Usage:
             else:
                 self.heavy.add(g)
 
+    def ram_short(self, req: Req) -> bool:
+        """Whether the RAM running jobs have booked leaves too little for req."""
+        return self.m.ram is not None and self.ram + ram_of(req) > self.m.ram
+
     def fit(self, req: Req) -> list[int] | None:
         """GPUs to give this job if it can start now, else None."""
         m = self.m
         if self.exclusive or self.slots + self.cost(req) > m.slots:
+            return None
+        if self.ram_short(req):
             return None
         if req.exclusive:
             if self.count:
@@ -266,10 +289,12 @@ def plan(
             # A job that wouldn't fit even with no jobs running (programs outside
             # gpushift hold the memory it needs) holds nothing back: waiting for
             # the queue to empty wouldn't help it.
-            if guard and (req.barrier or req.uses_gpu) and idle.fit(req) is not None:
+            short = u.ram_short(req)
+            if guard and (req.barrier or req.uses_gpu or short) and idle.fit(req) is not None:
                 deadline = min(deadline, reservation(req, ends, machine))
-                barrier_waiting = barrier_waiting or req.barrier
-                gpu_waiting = True
+                # Every job takes RAM, so one waiting for RAM holds back all of them.
+                barrier_waiting = barrier_waiting or req.barrier or short
+                gpu_waiting = gpu_waiting or req.uses_gpu
             continue
         start(req, g)
     return starts
@@ -293,12 +318,13 @@ def simulate(
     running: (req, gpus, expected remaining seconds or None)
     None means unknown (a job ahead of it has no runtime estimate).
     machine.mem_ok (GPUs busy outside gpushift) only applies to "now"; later
-    rounds optimistically assume that external usage is gone.
+    rounds optimistically assume that external usage is gone. The RAM budget
+    (machine.ram) is assumed to stay as it is.
     slack > 0: at every point where jobs start, apply reorder() as the daemon
     would (with ``pinned`` and promised ``limits``).
     after:   job id -> ids of queued/running jobs it waits for (--after).
     out:     if given, filled with job id -> (start, gpus, end or None)."""
-    m = Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity)
+    m = Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity, machine.ram)
     first = True
     t = 0.0
     act = [(r, g, (rem if rem is not None else math.inf)) for r, g, rem in running]
@@ -379,7 +405,7 @@ class Reorder:
 
 
 def _shape(r: Req) -> tuple:
-    return (r.n_gpus, r.slots, r.exclusive, r.shared, r.vram)
+    return (r.n_gpus, r.slots, r.exclusive, r.shared, r.vram, r.ram)
 
 
 def reorder(

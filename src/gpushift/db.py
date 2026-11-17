@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     notified INTEGER NOT NULL DEFAULT 0,  -- the submitting session was told it ended
     vram_mb INTEGER,                  -- GPU memory the job needs per GPU (--vram, or learned)
     peak_vram_mb INTEGER,             -- most GPU memory it was seen using
+    ram_mb INTEGER,                   -- RAM the job needs (--ram)
+    peak_ram_mb INTEGER,              -- most RAM it was seen using (all its processes)
     submitted_at REAL NOT NULL,
     started_at REAL,
     ended_at REAL,
@@ -87,6 +89,8 @@ ADDED_COLUMNS = [
     ("peak_vram_mb", "INTEGER"),
     ("paused_s", "REAL NOT NULL DEFAULT 0"),
     ("after_ids", "TEXT"),
+    ("ram_mb", "INTEGER"),
+    ("peak_ram_mb", "INTEGER"),
 ]
 
 

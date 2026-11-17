@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Jobs only start when the RAM they need fits: gpushift learns each command's
+  peak RAM from earlier runs (or takes `--ram 12G`), books it while the job
+  runs, and keeps `ram_reserve_perc` (10%) of RAM free. Jobs it has not seen
+  before count as 2 GB. `gpushift status` shows RAM booked. `ram_aware = false`
+  turns this off.
+- The default is now 3 slots per GPU (was 2), so CPU jobs no longer leave a GPU
+  idle on a 2-GPU machine; RAM, not slots, now keeps the machine from
+  overfilling. A `slots` value in your config still applies.
+
 ## 0.1.7 (2026-11-18)
 
 - A `--light` job no longer waits while a `--one` job holds the shared GPU; it

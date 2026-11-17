@@ -27,6 +27,9 @@ class Queue:
             GPUSHIFT_FAKE_GPU_PROCS=str(self.gpu_procs),
             GPUSHIFT_TICK="0.2",
             GPUSHIFT_GPU_POLL="0.5",
+            # Plenty of RAM, none of it in use: the test machine's own RAM
+            # use must not decide what starts. Tests that check RAM set it.
+            GPUSHIFT_FAKE_RAM="65536,0",
         )
         for k, v in self.env.items():
             if k.startswith("GPUSHIFT_"):

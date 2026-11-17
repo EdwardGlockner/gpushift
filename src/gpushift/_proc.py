@@ -129,6 +129,48 @@ class Snapshot:
         return out
 
 
+MiB = 2**20
+
+
+def system_memory() -> tuple[int, int]:
+    """(total, in use) RAM in MiB. GPUSHIFT_FAKE_RAM="total,used" (MiB)
+    replaces the reading, for tests."""
+    fake = os.environ.get("GPUSHIFT_FAKE_RAM")
+    if fake:
+        total, used = (int(x) for x in fake.split(","))
+        return total, used
+    vm = psutil.virtual_memory()
+    return vm.total // MiB, (vm.total - vm.available) // MiB
+
+
+def tree_memory(pids) -> tuple[int, int, int]:
+    """(resident, private, peak private) RAM in MiB of these processes together.
+
+    resident: everything in RAM, including pages of memory-mapped files and
+    DLLs, which the OS can drop and reread whenever it needs the RAM.
+    private: the part it can't drop, i.e. what a job really needs. On Windows,
+    min(private commit, working set): CUDA commits far more than it touches,
+    and mapped files fill the working set without being private. Elsewhere
+    resident minus shared. peak: the same from each process's recorded peaks
+    (Windows; a sum of peaks reached at different times errs high, the safe
+    side), else the current value."""
+    res = priv = peak = 0
+    for pid in pids:
+        try:
+            mi = psutil.Process(pid).memory_info()
+        except psutil.Error:
+            continue
+        res += mi.rss
+        if IS_WINDOWS:
+            p = min(mi.private, mi.rss)
+            peak += max(p, min(mi.peak_pagefile, mi.peak_wset))
+        else:
+            p = max(0, mi.rss - getattr(mi, "shared", 0))
+            peak += p
+        priv += p
+    return res // MiB, priv // MiB, peak // MiB
+
+
 def suspend_tree(pid: int | None, ctime: float | None = None) -> bool:
     p = get_proc(pid, ctime)
     if p is None:
