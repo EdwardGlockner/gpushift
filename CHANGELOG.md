@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A `--light` job no longer waits while a `--one` job holds the shared GPU; it
+  runs on an idle GPU instead.
+- On Windows, freezing a job (`gpushift free`) also moves its memory out of RAM,
+  so the frozen job no longer holds RAM you need. It comes back when the job
+  resumes.
+
 ## 0.1.6 (2026-11-16)
 
 - The dashboard queue shows when each job is expected to start, and marks jobs
