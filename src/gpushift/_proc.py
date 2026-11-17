@@ -151,7 +151,8 @@ def tree_memory(pids) -> tuple[int, int, int]:
     private: the part it can't drop, i.e. what a job really needs. On Windows,
     min(private commit, working set): CUDA commits far more than it touches,
     and mapped files fill the working set without being private. Elsewhere
-    resident minus shared. peak: the same from each process's recorded peaks
+    resident minus shared (macOS reports no shared memory, so there mapped
+    files count as private: errs high). peak: the same from each process's recorded peaks
     (Windows; a sum of peaks reached at different times errs high, the safe
     side), else the current value."""
     res = priv = peak = 0

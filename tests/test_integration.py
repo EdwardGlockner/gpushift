@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import time
 
 import pytest
@@ -495,6 +496,9 @@ def test_ram_peak_is_recorded(q):
     assert q.job(jid)["peak_ram_mb"] >= 200
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin", reason="macOS does not report shared memory: mapped files count as private"
+)
 def test_memory_mapped_files_are_not_booked(q, tmp_path):
     # Reading a 300 MB file through mmap fills the working set, but the OS can
     # drop those pages any time: they are not RAM the job needs.
