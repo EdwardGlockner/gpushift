@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 (2026-11-18)
 
 - Jobs only start when the RAM they need fits: gpushift learns each command's
   peak RAM from earlier runs (or takes `--ram 12G`), books it while the job
