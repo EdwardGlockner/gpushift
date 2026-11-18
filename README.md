@@ -73,8 +73,10 @@ Pick how much of the machine a job needs:
 
 Useful options:
 
-- `--eta 40m`: how long the job takes, for better start times. Without it, gpushift
-  learns from earlier runs of the same command.
+- `--eta 40m`: how long the job takes, for better start times. gpushift scales it
+  by how long earlier jobs of the project really ran compared with their `--eta`.
+  Without it, gpushift learns from earlier runs of the same command, and from how
+  much faster each GPU ran them.
 - `--after 12`: start only once job 12 has succeeded, e.g. an eval after its
   training run. Use this whenever order matters; otherwise jobs may run side by side.
 - `--restartable`: the job is safe to stop and run again from the start.

@@ -230,6 +230,19 @@ class Usage:
         return sorted(free[: req.n_gpus])
 
 
+PerGpu = dict[int, dict[int, float | None]]  # job id -> GPU -> expected seconds on that GPU
+
+
+def on_gpus(per_gpu: PerGpu | None, job_id: int, gpus: list[int], default: float | None) -> float | None:
+    """A job's expected seconds on these GPUs: from ``per_gpu`` for a one-GPU
+    placement it has an estimate for, else ``default``."""
+    if per_gpu and len(gpus) == 1:
+        d = per_gpu.get(job_id, {}).get(gpus[0])
+        if d is not None:
+            return d
+    return default
+
+
 def reservation(req: Req, ends: list[tuple[Req, list[int], float | None]], machine: Machine) -> float:
     """Seconds from now until ``req`` could start, if the jobs in ``ends``
     (req, gpus, expected seconds left; None = unknown) end as expected and
@@ -254,13 +267,15 @@ def plan(
     guard: bool = True,
     durations: dict[int, float | None] | None = None,
     remaining: dict[int, float | None] | None = None,
+    per_gpu: PerGpu | None = None,
 ) -> list[tuple[int, list[int]]]:
     """Which queued jobs (in queue order) start now, and on which GPUs.
 
     durations (queued job id -> expected seconds) and remaining (running job
     id -> expected seconds left) let held-back jobs use idle resources when
     they will be done before the job holding them back could start. Without
-    them, held-back jobs wait."""
+    them, held-back jobs wait. per_gpu refines durations by where a job lands
+    (GPUs differ in speed)."""
     durations = durations or {}
     remaining = remaining or {}
     idle = Usage(machine)  # the machine with no jobs on it
@@ -275,13 +290,13 @@ def plan(
 
     def start(req: Req, g: list[int]) -> None:
         u.add(req, g)
-        ends.append((req, g, durations.get(req.id)))
+        ends.append((req, g, on_gpus(per_gpu, req.id, g, durations.get(req.id))))
         starts.append((req.id, g))
 
     for req in queued:
         g = u.fit(req)
         if guard and (barrier_waiting or (gpu_waiting and req.uses_gpu)):
-            dur = durations.get(req.id)
+            dur = None if g is None else on_gpus(per_gpu, req.id, g, durations.get(req.id))
             if g is not None and dur is not None and dur <= deadline < math.inf:
                 start(req, g)
             continue
@@ -311,6 +326,7 @@ def simulate(
     limits: dict[int, float] | None = None,
     after: dict[int, set[int]] | None = None,
     out: dict[int, tuple[float, list[int], float | None]] | None = None,
+    per_gpu: PerGpu | None = None,
 ) -> dict[int, float | None]:
     """Estimated start offset (seconds from now) for each queued job.
 
@@ -323,7 +339,9 @@ def simulate(
     slack > 0: at every point where jobs start, apply reorder() as the daemon
     would (with ``pinned`` and promised ``limits``).
     after:   job id -> ids of queued/running jobs it waits for (--after).
-    out:     if given, filled with job id -> (start, gpus, end or None)."""
+    out:     if given, filled with job id -> (start, gpus, end or None).
+    per_gpu: job id -> GPU -> expected seconds there, for jobs whose run time
+             depends on which GPU they get."""
     m = Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity, machine.ram)
     first = True
     t = 0.0
@@ -351,6 +369,7 @@ def simulate(
                 pinned=pinned,
                 limits={k: v - t for k, v in promised.items()},
                 after=waiting,
+                per_gpu=per_gpu,
             )
             pos = {i: n for n, i in enumerate(res.order)}
             pending.sort(key=lambda q: pos[q[0].id])
@@ -363,6 +382,7 @@ def simulate(
                 guard,
                 durations={r.id: d for r, d in ready},
                 remaining={r.id: rem for r, _, rem in now_running},
+                per_gpu=per_gpu,
             )
         )
         if res is not None and any(i in starts for i in res.moved):
@@ -373,6 +393,7 @@ def simulate(
         for r, dur in pending:
             if r.id in starts:
                 est[r.id] = t
+                dur = on_gpus(per_gpu, r.id, starts[r.id], dur)
                 act.append((r, starts[r.id], t + dur if dur is not None else math.inf))
                 if out is not None:
                     out[r.id] = (t, starts[r.id], t + dur if dur is not None else None)
@@ -418,6 +439,7 @@ def reorder(
     pinned: set[int] | frozenset[int] = frozenset(),
     limits: dict[int, float] | None = None,
     after: dict[int, set[int]] | None = None,
+    per_gpu: PerGpu | None = None,
 ) -> Reorder:
     """Run jobs ahead of their turn when that makes everyone wait less overall.
 
@@ -431,7 +453,7 @@ def reorder(
     reorders therefore cannot push a job back again and again. Jobs still
     waiting for others (``after``) are never moved."""
     after = after or {}
-    base = simulate(queued, running, machine, guard, after=after)
+    base = simulate(queued, running, machine, guard, after=after, per_gpu=per_gpu)
     ids = [r.id for r, _ in queued]
     best = Reorder(ids, base)
     if slack <= 0 or len(queued) < 2:
@@ -469,7 +491,7 @@ def reorder(
         for n in range(1, len(group) + 1):
             front = set(group[:n])
             cand = [queued[j] for j in group[:n]] + [q for j, q in enumerate(queued) if j not in front]
-            est = simulate(cand, running, machine, guard, after=after)
+            est = simulate(cand, running, machine, guard, after=after, per_gpu=per_gpu)
             if any(est[i] is None or est[i] > lim[i] + 1e-6 for i in known):
                 break  # moving more of them only pushes the others back further
             gain = total_base - sum(est[i] for i in known)

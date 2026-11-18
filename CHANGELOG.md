@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Better runtime estimates. `--eta` is scaled by how long earlier jobs really
+  ran compared with theirs (per project once it has 5 finished jobs, else over
+  all projects), so start times no longer drift when estimates are padded.
+- On machines with different GPUs, gpushift learns how much slower each GPU
+  runs the same command and estimates a job's runtime for the GPU it runs or
+  would run on. Start times and short jobs filling idle GPUs use it.
+
 ## 0.1.9 (2026-11-18)
 
 - Agents no longer change the queue order. `--priority`, `gpushift priority`

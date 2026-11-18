@@ -216,3 +216,40 @@ def history_runtimes(con, command: str, project: str | None, limit: int = 10) ->
         (command, project, limit),
     ).fetchall()
     return [r["total_runtime"] for r in rows]
+
+
+def history_runs(con, command: str, project: str | None, limit: int = 10) -> list[tuple[float, list[int]]]:
+    """(runtime, GPUs it ran on) of recent successful runs, newest first."""
+    rows = con.execute(
+        "SELECT total_runtime, gpus FROM jobs WHERE state='done' AND command=? AND project IS ? "
+        "AND total_runtime > 0 ORDER BY ended_at DESC LIMIT ?",
+        (command, project, limit),
+    ).fetchall()
+    return [(r["total_runtime"], json.loads(r["gpus"]) if r["gpus"] else []) for r in rows]
+
+
+def eta_runs(con, limit: int) -> list[tuple[str | None, float, int]]:
+    """(project, runtime, --eta) of recent successful runs that had an --eta
+    and were never evicted, newest first."""
+    rows = con.execute(
+        "SELECT project, total_runtime, eta_seconds FROM jobs WHERE state='done' AND eta_seconds > 0 "
+        "AND evictions=0 AND total_runtime > 0 ORDER BY ended_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [(r["project"], r["total_runtime"], r["eta_seconds"]) for r in rows]
+
+
+def single_gpu_runs(con, limit: int) -> list[tuple[str, str | None, int, float]]:
+    """(command, project, GPU, runtime) of recent successful one-GPU runs that
+    stayed on one GPU (never evicted), newest first."""
+    rows = con.execute(
+        "SELECT command, project, gpus, total_runtime FROM jobs WHERE state='done' AND n_gpus=1 "
+        "AND evictions=0 AND total_runtime > 0 AND gpus IS NOT NULL ORDER BY ended_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        g = json.loads(r["gpus"])
+        if len(g) == 1:
+            out.append((r["command"], r["project"], g[0], r["total_runtime"]))
+    return out

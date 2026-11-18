@@ -270,7 +270,7 @@ class Daemon:
             if db.get_mode(self.con) != "normal":
                 return
             guard, fair = self.cfg.starvation_guard, self.cfg.fair_share
-            running, queued, remaining, durations, res, waiting = control.decide(
+            running, queued, remaining, durations, res, waiting, per_gpu = control.decide(
                 self.con, machine, guard, fair, self.cfg.reorder_slack, now
             )
             starts = scheduler.plan(
@@ -280,6 +280,7 @@ class Daemon:
                 guard,
                 durations=durations,
                 remaining=remaining,
+                per_gpu=per_gpu,
             )
             jumped = [jid for jid, _ in starts if jid in res.moved]
             if jumped:

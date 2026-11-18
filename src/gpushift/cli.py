@@ -116,7 +116,9 @@ def job_public(con, j: dict) -> dict:
         "runtime_s": round(runtime),
         "exit_code": j["exit_code"],
         "eta_s": j["eta_seconds"],
-        "expected_duration_s": (lambda d: None if d is None else round(d))(control.expected_duration(con, j)),
+        "expected_duration_s": (lambda d: None if d is None else round(d))(
+            control.expected_duration(con, j, control.placed_gpus(j), control.gpu_speeds(con))
+        ),
         "resumable": control.is_resumable(j),
         "restartable": bool(j["restartable"]),
         "vram_mb": j["vram_mb"],
@@ -362,7 +364,7 @@ def timeline(con, running: list[dict], queue: list[dict], placed: dict) -> dict:
     now = time.time()
     items = []
     for j in running:
-        left = control.time_left(con, j, now)
+        left = control.time_left(con, j, now, control.gpu_speeds(con))
         items.append(
             {"id": j["id"], "gpus": j["gpus"] or [], "start": j["started_at"], "end": None if left is None else now + left,
              "state": j["state"]}

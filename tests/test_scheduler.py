@@ -164,6 +164,29 @@ def test_simulate_unknown():
     assert est[2] is None
 
 
+def test_simulate_uses_the_run_time_on_the_gpu_a_job_gets():
+    # Job 2 lands on GPU 1, where it takes 600 s instead of 60 s, so job 3
+    # waits for GPU 0 (free at 100 s) instead of following job 2 at 60 s.
+    running = [(one(1), [0], 100.0)]
+    queue = [(one(2), 60.0), (one(3), 60.0)]
+    assert simulate(queue, running, M2)[3] == 60.0
+    out = {}
+    est = simulate(queue, running, M2, per_gpu={2: {0: 60.0, 1: 600.0}}, out=out)
+    assert est[3] == 100.0
+    assert out[2] == (0.0, [1], 600.0)
+
+
+def test_held_back_job_uses_its_run_time_on_the_free_gpu():
+    # A --two job waits for GPU 0 (free at 300 s). Job 3 may use idle GPU 1
+    # only if it is done by then: 200 s on GPU 1 is, 400 s is not.
+    running = [(one(1), [0])]
+    queue = [two(2), one(3)]
+    durations = {2: 100.0, 3: 200.0}
+    assert plan(queue, running, M2, durations=durations, remaining={1: 300.0}) == [(3, [1])]
+    slow = {3: {0: 200.0, 1: 400.0}}
+    assert plan(queue, running, M2, durations=durations, remaining={1: 300.0}, per_gpu=slow) == []
+
+
 def test_simulate_external_gpu_usage_only_blocks_now():
     # GPU 0 busy outside gpushift, GPU 1 runs job 1 for 300s: job 2 can't start now
     m = Machine([0, 1], 1, 4, mem_ok={1})

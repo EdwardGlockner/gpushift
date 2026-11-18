@@ -156,6 +156,71 @@ def test_time_left_once_overdue_uses_longer_earlier_runs(tmp_path):
     assert control.time_left(con, {**j, "command": "new"}, now=13_000.0) is None  # no estimate at all
 
 
+def _done(con, command, gpu, runtime, **kw):
+    from gpushift import db
+
+    db.insert_job(
+        con, state="done", preset="one", n_gpus=1, slots=2, position=0.0, argv=[command], command=command, cwd=".",
+        env={}, gpus=[gpu], total_runtime=float(runtime), ended_at=float(runtime), **kw,
+    )  # fmt: skip
+
+
+def test_estimates_depend_on_which_gpu_the_job_runs_on(tmp_path):
+    from gpushift import control, db
+
+    con = db.connect(tmp_path / "q.db")
+    assert control.gpu_speeds(con) == {}
+    for gpu, rt in ((0, 100), (0, 110), (1, 200), (1, 220)):  # "a" takes twice as long on GPU 1
+        _done(con, "a", gpu, rt)
+    _done(con, "b", 0, 300)  # "b" only ran on GPU 0
+    _done(con, "a", 1, 5000, evictions=1)  # evicted runs may have moved GPU: not used for speeds
+    speeds = control.gpu_speeds(con)
+    assert speeds == {0: 1.0, 1: 2.0}
+
+    b = {"eta_seconds": None, "command": "b", "project": None, "total_runtime": 0.0, "state": "queued",
+         "started_at": None, "gpus": None, "n_gpus": 1, "id": 7}  # fmt: skip
+    assert control.expected_duration(con, b) == 300.0  # GPU unknown: as before
+    assert control.expected_duration(con, b, [0], speeds) == 300.0
+    assert control.expected_duration(con, b, [1], speeds) == 600.0  # scaled by GPU 1's speed
+    assert control.per_gpu_durations(con, [b], [0, 1], speeds, now=0.0) == {7: {0: 300.0, 1: 600.0}}
+    assert control.per_gpu_durations(con, [{**b, "eta_seconds": 60}], [0, 1], speeds, now=0.0) == {}
+    # a running job's time left is for the GPU it runs on
+    on1 = {**b, "state": "running", "started_at": 1000.0, "gpus": [1]}
+    assert control.time_left(con, on1, now=1100.0, speeds=speeds) == 500.0
+    assert control.time_left(con, on1, now=1100.0) == 200.0  # no speeds: GPU-blind
+    # runs on exactly that GPU win over scaling
+    a_on1 = {**on1, "command": "a"}
+    assert control.expected_duration(con, a_on1, [1], speeds) == 220.0  # median of 200, 220, 5000
+    # learned again once another job finishes
+    _done(con, "b", 1, 900)
+    assert control.gpu_speeds(con)[1] == 2.5  # median of a: 2.0 and b: 3.0
+
+
+def test_eta_is_scaled_by_how_long_jobs_ran_compared_with_it(tmp_path):
+    from gpushift import control, db
+
+    con = db.connect(tmp_path / "q.db")
+    j = {"eta_seconds": 1000, "command": "new", "project": "p", "total_runtime": 0.0, "state": "queued",
+         "started_at": None}  # fmt: skip
+    for _ in range(4):
+        _done(con, "x", 0, 700, eta_seconds=1000, project="p")
+    assert control.expected_duration(con, j) == 1000.0  # too few runs yet
+    _done(con, "x", 0, 700, eta_seconds=1000, project="p")
+    assert control.expected_duration(con, j) == 700.0  # agents' --eta runs 30% long
+    # another project with its own runs uses those; one without uses all projects
+    for _ in range(5):
+        _done(con, "y", 0, 2000, eta_seconds=1000, project="q")
+    assert control.expected_duration(con, {**j, "project": "q"}) == 2000.0
+    assert control.expected_duration(con, {**j, "project": "other"}) == 1350.0  # median over all 10
+    # evicted runs, failed runs and runs without --eta don't count; the factor is clamped
+    for _ in range(5):
+        _done(con, "z", 0, 9000, eta_seconds=100, project="r", evictions=1)
+        _done(con, "z", 0, 100_000, eta_seconds=100, project="s")
+    assert control.eta_factor(con, "r") == control.eta_factor(con, "other")
+    assert control.eta_factor(con, "s") == control.ETA_FACTOR_RANGE[1]
+    assert control.eta_factor(None, "p") == 1.0
+
+
 def test_ram_need_booking_and_budget(tmp_path):
     from gpushift import control, db
     from gpushift.scheduler import RAM_UNKNOWN_MB

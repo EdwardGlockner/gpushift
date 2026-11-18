@@ -361,17 +361,118 @@ def reconcile(con, grace: float = 60.0) -> list[int]:
 # ---------------------------------------------------------------- estimates
 
 
-def expected_duration(con, j: dict) -> float | None:
+SPEED_HISTORY = 500  # recent one-GPU runs used to learn how fast each GPU is
+
+
+def gpu_speeds(con) -> dict[int, float]:
+    """How long jobs take on each GPU relative to the GPU most runs used (1.0;
+    2.0 = twice as long). Learned from commands that finished on more than one
+    GPU; GPUs that share no command with the reference GPU are left out, and
+    the result is empty until there are two such GPUs."""
+    return _learned(con, "speeds", _learn_speeds)
+
+
+_cache: dict[str, tuple] = {}
+
+
+def _learned(con, name: str, learn):
+    """learn(con), cached until another job finishes."""
+    key = (id(con), tuple(con.execute("SELECT COUNT(*), MAX(ended_at) FROM jobs WHERE state='done'").fetchone()))
+    hit = _cache.get(name)
+    if hit and hit[0] == key:
+        return hit[1]
+    _cache[name] = (key, learn(con))
+    return _cache[name][1]
+
+
+ETA_HISTORY = 200  # recent runs with an --eta used to calibrate --eta
+ETA_MIN_RUNS = 5  # runs needed before --eta is scaled
+ETA_FACTOR_RANGE = (0.25, 4.0)
+
+
+def _learn_eta_factors(con) -> dict:
+    """Project -> median of runtime / --eta over its runs; key ``...`` (Ellipsis):
+    over all projects. Only groups with at least ETA_MIN_RUNS runs."""
+    ratios: dict = {...: []}
+    for project, t, eta in db.eta_runs(con, ETA_HISTORY):
+        ratios.setdefault(project, []).append(t / eta)
+        ratios[...].append(t / eta)
+    lo, hi = ETA_FACTOR_RANGE
+    return {k: min(max(statistics.median(v), lo), hi) for k, v in ratios.items() if len(v) >= ETA_MIN_RUNS}
+
+
+def eta_factor(con, project: str | None) -> float:
+    """How long jobs run compared with their --eta (0.7: they finish in 70% of
+    it), learned from finished jobs of the same project, else of all projects.
+    1.0 until enough jobs have finished."""
+    if con is None:
+        return 1.0
+    f = _learned(con, "eta", _learn_eta_factors)
+    return f.get(project, f.get(..., 1.0))
+
+
+def _learn_speeds(con) -> dict[int, float]:
+    runs: dict[tuple, dict[int, list[float]]] = {}
+    count: dict[int, int] = {}
+    for command, project, g, t in db.single_gpu_runs(con, SPEED_HISTORY):
+        runs.setdefault((command, project), {}).setdefault(g, []).append(t)
+        count[g] = count.get(g, 0) + 1
+    if len(count) < 2:
+        return {}
+    ref = max(count, key=lambda g: (count[g], -g))
+    out = {ref: 1.0}
+    for g in count:
+        ratios = [
+            statistics.median(by[g]) / statistics.median(by[ref])
+            for by in runs.values()
+            if g != ref and g in by and ref in by
+        ]
+        if ratios:
+            out[g] = statistics.median(ratios)
+    return out if len(out) > 1 else {}
+
+
+def placed_gpus(j: dict) -> list[int] | None:
+    """The GPUs a job runs on now, or None when it isn't placed (queued)."""
+    return j["gpus"] if j["state"] in db.ACTIVE and j.get("gpus") is not None else None
+
+
+def _runtimes_on(runs: list[tuple[float, list[int]]], gpus: list[int] | None, speeds: dict[int, float]) -> list[float]:
+    """Earlier runtimes as they would be on ``gpus``: runs on exactly those GPUs
+    if there are any; else, for one GPU with a known speed, the one-GPU runs
+    scaled by the speed difference; else all runs."""
+    if gpus is not None:
+        same = [t for t, g in runs if g == gpus]
+        if same:
+            return same
+        if len(gpus) == 1 and gpus[0] in speeds:
+            f = speeds[gpus[0]]
+            scaled = [t / speeds[g[0]] * f for t, g in runs if len(g) == 1 and g[0] in speeds]
+            if scaled:
+                return scaled
+    return [t for t, _ in runs]
+
+
+def expected_duration(
+    con, j: dict, gpus: list[int] | None = None, speeds: dict[int, float] | None = None
+) -> float | None:
+    """Expected runtime: --eta scaled by how long jobs ran compared with their
+    --eta before (eta_factor), or learned from earlier runs of the same command.
+    With ``gpus`` (where it runs or would run) and ``speeds`` (gpu_speeds), the
+    learned estimate is for those GPUs; without, it is the median over all GPUs."""
     if j["eta_seconds"]:
-        return float(j["eta_seconds"])
-    hist = db.history_runtimes(con, j["command"], j["project"])
+        return float(j["eta_seconds"]) * eta_factor(con, j.get("project"))
+    runs = db.history_runs(con, j["command"], j["project"])
+    hist = _runtimes_on(runs, gpus, speeds or {})
     return statistics.median(hist) if hist else None
 
 
 OVERRUN_MIN_SECONDS = 300.0  # least time left a job past its estimate counts as
 
 
-def time_left(con, j: dict, now: float | None = None) -> float | None:
+def time_left(
+    con, j: dict, now: float | None = None, speeds: dict[int, float] | None = None, gpus: list[int] | None = None
+) -> float | None:
     """Expected seconds until the job is done (for a queued job: its whole
     remaining run). Counts time it already ran before an eviction. None when
     unknown (no estimate).
@@ -379,15 +480,20 @@ def time_left(con, j: dict, now: float | None = None) -> float | None:
     A job past its estimate still gets one, so jobs behind it can keep using
     idle GPUs: the median time left of earlier runs that lasted at least this
     long, or else as long again as it has run so far (at least
-    OVERRUN_MIN_SECONDS). It grows each time the job outlives it."""
-    dur = expected_duration(con, j)
+    OVERRUN_MIN_SECONDS). It grows each time the job outlives it.
+
+    With ``speeds`` (gpu_speeds), the estimate is for the GPUs the job runs on,
+    or for ``gpus`` when given (where a queued job would run)."""
+    gpus = gpus if gpus is not None else placed_gpus(j) if speeds is not None else None
+    dur = expected_duration(con, j, gpus, speeds)
     if dur is None:
         return None
     done = ran(j, now)
     left = dur - done
     if left > 0:
         return left
-    longer = [h - done for h in db.history_runtimes(con, j["command"], j["project"], limit=50)] if con else []
+    runs = db.history_runs(con, j["command"], j["project"], limit=50) if con else []
+    longer = [h - done for h in _runtimes_on(runs, gpus, speeds or {})]
     longer = [x for x in longer if x > 0]
     return max(statistics.median(longer) if longer else done, OVERRUN_MIN_SECONDS)
 
@@ -480,9 +586,23 @@ def cancel_orphans(con) -> list[tuple[int, int, str]]:
     return out
 
 
-def plan_inputs(con, now: float | None = None, fair: bool = False):
+def per_gpu_durations(con, queued: list[dict], gpus: list[int], speeds: dict[int, float], now: float) -> dict:
+    """Queued one-GPU job id -> GPU -> expected seconds on that GPU, for jobs
+    whose estimate depends on the GPU (learned, not --eta)."""
+    out = {}
+    for j in queued:
+        if j["n_gpus"] != 1 or j["eta_seconds"] or len(gpus) < 2:
+            continue
+        by = {g: time_left(con, j, now, speeds, gpus=[g]) for g in gpus}
+        if len(set(by.values())) > 1:
+            out[j["id"]] = by
+    return out
+
+
+def plan_inputs(con, now: float | None = None, fair: bool = False, gpus: list[int] = ()):
     """Running jobs, queued jobs (in queue order), the time estimates the
-    scheduler uses, and what queued jobs still wait for (--after)."""
+    scheduler uses, what queued jobs still wait for (--after), and queued jobs'
+    estimates per GPU (``gpus``: the machine's GPUs)."""
     now = time.time() if now is None else now
     active, queued = db.active(con), ordered_queue(con, fair, now)
     job_ram = {int(k): v for k, v in (db.get_kv(con, "job_ram") or {}).items()}
@@ -492,9 +612,11 @@ def plan_inputs(con, now: float | None = None, fair: bool = False):
     for j in active:
         j["ram_need"] = ram_booked(j["ram_need"], j, job_ram.get(j["id"]))
     running = [(req_of(j), j["gpus"] or []) for j in active]
-    remaining = {j["id"]: time_left(con, j, now) for j in active}
+    speeds = gpu_speeds(con)
+    remaining = {j["id"]: time_left(con, j, now, speeds) for j in active}
     durations = {j["id"]: time_left(con, j, now) for j in queued}
-    return running, queued, remaining, durations, waiting_for(con, queued)
+    per_gpu = per_gpu_durations(con, queued, list(gpus), speeds, now)
+    return running, queued, remaining, durations, waiting_for(con, queued), per_gpu
 
 
 def decide(con, machine: Machine, guard: bool, fair: bool = False, slack: float = 0.0, now: float | None = None):
@@ -502,16 +624,17 @@ def decide(con, machine: Machine, guard: bool, fair: bool = False, slack: float 
     the front when that saves waiting overall (see scheduler.reorder).
 
     Returns (running, queued in that order, remaining, durations, Reorder,
-    waiting) where waiting maps jobs that may not start yet to what they wait for."""
+    waiting, per_gpu) where waiting maps jobs that may not start yet to what
+    they wait for and per_gpu holds queued jobs' estimates per GPU."""
     now = time.time() if now is None else now
-    running, queued, remaining, durations, waiting = plan_inputs(con, now, fair)
-    args, kw = _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting)
+    running, queued, remaining, durations, waiting, per_gpu = plan_inputs(con, now, fair, machine.gpus)
+    args, kw = _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting, per_gpu)
     res = reorder(*args, **kw)
     by_id = {j["id"]: j for j in queued}
-    return running, [by_id[i] for i in res.order], remaining, durations, res, waiting
+    return running, [by_id[i] for i in res.order], remaining, durations, res, waiting, per_gpu
 
 
-def _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting):
+def _reorder_args(con, queued, running, remaining, durations, machine, guard, slack, now, waiting, per_gpu):
     promised = db.get_kv(con, "reorder_limits") or {}
     return (
         [(req_of(j), durations[j["id"]]) for j in queued],
@@ -523,6 +646,7 @@ def _reorder_args(con, queued, running, remaining, durations, machine, guard, sl
         pinned={j["id"] for j in queued if j["prio"] or j["resume"]},
         limits={int(k): v - now for k, v in promised.items()},
         after=waiting,
+        per_gpu=per_gpu,
     )
 
 
@@ -538,10 +662,20 @@ def queue_and_starts(con, cfg, plan_out: dict | None = None) -> tuple[list[dict]
             j["waiting_for"] = sorted(waiting.get(j["id"], ()))
         return queued, {j["id"]: None for j in queued}
     now = time.time()
-    running, queued, remaining, durations, waiting = plan_inputs(con, now, cfg.fair_share)
     machine = live_machine(cfg, con)
+    running, queued, remaining, durations, waiting, per_gpu = plan_inputs(con, now, cfg.fair_share, machine.gpus)
     args, kw = _reorder_args(
-        con, queued, running, remaining, durations, machine, cfg.starvation_guard, cfg.reorder_slack, now, waiting
+        con,
+        queued,
+        running,
+        remaining,
+        durations,
+        machine,
+        cfg.starvation_guard,
+        cfg.reorder_slack,
+        now,
+        waiting,
+        per_gpu,
     )
     out: dict = {}
     off = simulate(*args, **kw, out=out)
