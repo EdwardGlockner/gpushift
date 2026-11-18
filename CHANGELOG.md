@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9 (2026-11-18)
+
+- Agents no longer change the queue order. `--priority`, `gpushift priority`
+  and `gpushift swap` are reserved for the user: the hook blocks them for
+  agents, the skill tells agents not to ask for a job to be moved up, and
+  `/gpushift:priority` can only be run by you.
+
 ## 0.1.8 (2026-11-18)
 
 - Jobs only start when the RAM they need fits: gpushift learns each command's
