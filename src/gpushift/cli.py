@@ -1044,7 +1044,7 @@ def build_parser() -> argparse.ArgumentParser:
         "and requeues it at the front instead of freezing it",
     )
     s.add_argument(
-        "--priority", action="store_true", help="put the job at the front of the queue (only when the user asks)"
+        "--priority", action="store_true", help="put the job at the front of the queue (user only)"
     )
     s.add_argument(
         "--after",

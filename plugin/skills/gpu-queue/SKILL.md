@@ -24,8 +24,10 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
 4. **Tag and estimate.** The tag defaults to the repo name; add `--tag` to tell
    your jobs apart. Give `--eta` when you can estimate the runtime (e.g. from the
    epoch count and a previous run). It makes everyone's start-time estimates better.
-5. **`--priority` only when the user asks for it.** It jumps ahead of other
-   sessions' work.
+5. **Never change the queue order, and don't ask to.** No `--priority`,
+   `gpushift priority` or `gpushift swap`: the user alone decides what moves up,
+   and does it themselves. Don't ask or suggest that a job be moved up, even if
+   yours waits a long time; at most report its estimated start when relevant.
 6. **Never run `gpushift free` or `gpushift resume`.** They pause or resume every session's
    GPU work and are reserved for the user (`/gpushift:free`, `/gpushift:resume`). If the user asks you
    to pause, free or stop the GPUs, show them `gpushift status` and tell them to run

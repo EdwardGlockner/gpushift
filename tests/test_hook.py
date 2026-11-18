@@ -132,6 +132,21 @@ def test_free_is_user_only():
     assert not hook.check("$env:GPUSHIFT_BY_USER = 1; gpushift resume").block
 
 
+def test_reordering_is_user_only():
+    assert hook.check("gpushift priority 7").block
+    assert hook.check("gpushift swap 3 4").block
+    assert hook.check("gpushift submit --one --priority -- python run.py").block
+    assert hook.check("gpushift retry 7 --priority").block
+    assert hook.check("cd x && gpushift priority 7").block
+    assert "do not ask" in hook.message(hook.check("gpushift priority 7"))
+    assert not hook.check("GPUSHIFT_BY_USER=1 gpushift priority 7").block
+    assert not hook.check("gpushift priority --help").block
+    # --priority after `--` belongs to the job's command
+    assert not hook.check("gpushift submit --one -- python run.py --priority").block
+    assert not hook.check("gpushift retry 7").block
+    assert not hook.check('git commit -m "gpushift priority 7"').block
+
+
 def test_config_allow_deny():
     assert not hook.check("python train.py", allow=[r"^python train\.py$"]).block
     assert hook.check("python my_thing.py", deny=["my_thing"]).block

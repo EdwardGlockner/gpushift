@@ -208,6 +208,20 @@ def is_free_or_resume(seg: str, env_vars: set[str]) -> bool:
     return env.get("GPUSHIFT_BY_USER") != "1" and "GPUSHIFT_BY_USER" not in env_vars
 
 
+def is_reorder(seg: str, env_vars: set[str]) -> bool:
+    """A command that changes the queue order: `gpushift priority`, `gpushift swap`, or
+    `submit`/`retry` with --priority (gpushift options only, not the job's own after `--`).
+    The queue order is the user's to change (/gpushift:priority sets GPUSHIFT_BY_USER=1)."""
+    t, env = strip_prefixes(tokens(seg))
+    if len(t) < 2 or re.sub(r"\.exe$", "", basename(t[0]).lower()) != "gpushift":
+        return False
+    opts = t[2 : t.index("--")] if "--" in t else t[2:]
+    if any(a in ("--help", "-h") for a in opts):
+        return False
+    reorders = t[1] in ("priority", "swap") or (t[1] in ("submit", "retry") and "--priority" in opts)
+    return reorders and env.get("GPUSHIFT_BY_USER") != "1" and "GPUSHIFT_BY_USER" not in env_vars
+
+
 def check(command: str, allow: list[str] = (), deny: list[str] = ()) -> Verdict:
     if NO_QUEUE.search(command):
         return Verdict(False)
@@ -218,6 +232,8 @@ def check(command: str, allow: list[str] = (), deny: list[str] = ()) -> Verdict:
             return Verdict(
                 True, "free/resume affects every session on this machine and is reserved for the user", seg, "free"
             )
+        if is_reorder(seg, env_vars):
+            return Verdict(True, "the queue order is changed only by the user", seg, "reorder")
     for pat in allow:
         if re.search(pat, command):
             return Verdict(False)
@@ -237,6 +253,11 @@ def message(v: Verdict) -> str:
             "Blocked by gpushift: `gpushift free` / `gpushift resume` pause or resume GPU work for every session on this machine, "
             "so only the user may run them. Do not retry. If you need the machine freed, ask the user to run "
             "/gpushift:free (or `gpushift free` in their terminal)."
+        )
+    if v.preset == "reorder":
+        return (
+            "Blocked by gpushift: the queue order is managed by the user alone. Do not retry, and do not ask "
+            "or suggest that the user move this job up. Submit without --priority and let it wait its turn."
         )
     seg = v.segment.strip()
     return (
