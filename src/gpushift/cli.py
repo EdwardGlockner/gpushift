@@ -1043,9 +1043,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="safe to stop and run again (e.g. it skips work it already finished): `gpushift free` stops it "
         "and requeues it at the front instead of freezing it",
     )
-    s.add_argument(
-        "--priority", action="store_true", help="put the job at the front of the queue (user only)"
-    )
+    s.add_argument("--priority", action="store_true", help="put the job at the front of the queue (user only)")
     s.add_argument(
         "--after",
         action="append",
