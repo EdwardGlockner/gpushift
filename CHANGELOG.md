@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A job that has run for half an hour is booked near the RAM it has used so
+  far (its peak plus a margin) instead of its `--ram` or the 2 GB default, so
+  generous estimates stop holding RAM that queued jobs could use.
+- `gpushift status` and the dashboard say why a job can't start, e.g. "needs
+  12.0 GB RAM, but only 2.7 GB is free for jobs", instead of blaming a missing
+  time estimate.
+
 ## 0.1.11 (2026-11-19)
 
 - When a job succeeds in under 10% of its `--eta`, the agent that submitted it

@@ -230,6 +230,26 @@ class Usage:
         return sorted(free[: req.n_gpus])
 
 
+def _gb(mb: float) -> str:
+    return f"{mb / 1024:.1f} GB"
+
+
+def never_fits(req: Req, machine: Machine) -> str | None:
+    """Why ``req`` could not start even if no other gpushift job ran, given the
+    RAM and GPU memory that programs outside gpushift leave; None if it could.
+    Such a job waits until those programs free memory."""
+    if machine.ram is not None and ram_of(req) > machine.ram:
+        return f"needs {_gb(ram_of(req))} RAM, but only {_gb(machine.ram)} is free for jobs"
+    idle = Usage(Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity, machine.ram))
+    if idle.packable(req) and req.n_gpus > 0:
+        most = max((machine.capacity or {}).values(), default=0)
+        if req.vram > most:
+            return f"needs {_gb(req.vram)} GPU memory, but at most {_gb(most)} is free on a GPU"
+    if idle.fit(req) is None:
+        return "does not fit this machine"
+    return None
+
+
 PerGpu = dict[int, dict[int, float | None]]  # job id -> GPU -> expected seconds on that GPU
 
 

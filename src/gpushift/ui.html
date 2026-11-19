@@ -369,11 +369,20 @@ function timelineView(s) {
   let note = "";
   if (s.mode !== "normal") note = "The queue is paused: nothing new starts until it is resumed.";
   else if (tl.unplaced.length) {
-    const open = tl.items.filter((i) => i.end == null && i.state !== "queued").map((i) => i.id);
-    const n = tl.unplaced.length, jobsTxt = `${n} waiting job${n === 1 ? "" : "s"}`;
-    note = open.length
-      ? `${jobsTxt} can't be placed yet: they wait for job ${open.join(", ")}, which ${open.length === 1 ? "has" : "have"} no expected end (no estimate, or past it).`
-      : `${jobsTxt} can't be placed yet: a job ahead of them has no time estimate.`;
+    const why = tl.why || {};
+    const never = tl.unplaced.filter((id) => (tl.never || []).includes(id));
+    const rest = tl.unplaced.filter((id) => !never.includes(id));
+    const lines = never.map((id) => `Job ${id} can't start: it ${why[id]}.`);
+    if (rest.length) {
+      const open = tl.items.filter((i) => i.end == null && i.state !== "queued").map((i) => i.id);
+      const n = rest.length, jobsTxt = `${n} waiting job${n === 1 ? "" : "s"}`;
+      lines.push(rest.length === 1 && why[rest[0]]
+        ? `Job ${rest[0]} can't be placed yet: ${why[rest[0]]}.`
+        : open.length
+          ? `${jobsTxt} can't be placed yet: they wait for job ${open.join(", ")}, which ${open.length === 1 ? "has" : "have"} no expected end (no estimate, or past it).`
+          : `${jobsTxt} can't be placed yet: ${why[rest[0]] || "a job ahead of them has no time estimate"}.`);
+    }
+    note = lines.join(" ");
   }
   return `<div class="tl">${axis}${rowHtml}${note ? `<div class="tl-note">${esc(note)}</div>` : ""}</div>`;
 }

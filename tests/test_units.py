@@ -261,6 +261,13 @@ def test_ram_need_booking_and_budget(tmp_path):
     assert control.ram_booked(None, {"peak_ram_mb": None}, 500) == RAM_UNKNOWN_MB  # may still grow
     assert control.ram_booked(None, {"peak_ram_mb": None}, 9000) == 9000
     assert control.ram_booked(None, {"peak_ram_mb": None}, None) is None
+    # After half an hour: booked near its peak so far, not at a generous --ram or the default.
+    old = {"peak_ram_mb": 1500, "state": "running", "started_at": 1000.0, "total_runtime": 0.0}
+    near = int(1500 * control.PACK_MARGIN + control.PACK_EXTRA_MB)
+    assert control.ram_booked(3072, old, 600, now=4600.0) == near
+    assert control.ram_booked(3072, old, 600, now=1600.0) == 3072  # too early to tell
+    assert control.ram_booked(None, old, 600, now=4600.0) == near
+    assert control.ram_booked(1000, old, 600, now=4600.0) == 1500  # never below what it used
     # 32 GB, 20 GB in use of which jobs use 12 GB: 8 GB is other programs; 10% reserve.
     assert control.ram_capacity(32000, 20000, {1: 8000, 2: 4000}, 10) == 28800 - 8000
     assert control.ram_capacity(32000, 31000, {}, 10) == 0
@@ -404,3 +411,26 @@ def test_agents_are_warned_when_a_job_succeeds_far_sooner_than_its_eta():
     assert notify.quick_finish({**j, "total_runtime": 400.0}) is None  # over 10% of the --eta
     assert notify.quick_finish({**j, "eta_seconds": None}) is None  # nothing to compare with
     assert notify.quick_finish({**j, "state": "failed"}) is None  # failures are reported anyway
+
+
+def test_jobs_that_cannot_start_say_why():
+    from gpushift.scheduler import Machine, Req, never_fits
+
+    m = Machine([0, 1], 1, 6, capacity={0: 6588, 1: 6144}, ram=2753)
+    assert never_fits(Req(1, 1, 2, ram=12288), m) == "needs 12.0 GB RAM, but only 2.7 GB is free for jobs"
+    assert never_fits(Req(2, 1, 2, vram=7168, ram=1000), m) == (
+        "needs 7.0 GB GPU memory, but at most 6.4 GB is free on a GPU"
+    )
+    assert never_fits(Req(3, 1, 2, vram=3072, ram=1000), m) is None
+    assert never_fits(Req(4, 1, 2), m) is None  # unknown RAM counts as 2 GB: fits
+
+    queue = [
+        {"id": 1, "n_gpus": 1, "slots": 2, "exclusive": 0, "shared": 0, "vram_need": None, "ram_need": 12288},
+        {"id": 2, "n_gpus": 1, "slots": 2, "exclusive": 0, "shared": 0, "vram_need": None, "ram_need": None,
+         "waiting_for": [1]},
+        {"id": 3, "n_gpus": 1, "slots": 2, "exclusive": 0, "shared": 0, "vram_need": None, "ram_need": None},
+    ]  # fmt: skip
+    why = cli.unplaced_reasons(queue, {}, m)
+    assert why[1].startswith("needs 12.0 GB RAM") and "other programs" in why[1]
+    assert why[2] == "waits for job 1, which can't start either"
+    assert "no expected end" in why[3]

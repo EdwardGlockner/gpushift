@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, autostart, config, control, daemon, db, gpus, notify, paths
+from . import __version__, autostart, config, control, daemon, db, gpus, notify, paths, scheduler
 from ._proc import NO_WINDOW
 from .scheduler import PRESETS, RAM_UNKNOWN_MB, PresetError, preset_requirements
 
@@ -372,9 +372,31 @@ def parse_after(con, values: list[str] | None) -> list[int]:
     return list(dict.fromkeys(ids))
 
 
-def timeline(con, running: list[dict], queue: list[dict], placed: dict) -> dict:
+def unplaced_reasons(queue: list[dict], placed: dict, machine) -> dict[int, str]:
+    """Why each queued job the forecast can't place has no start time."""
+    out: dict[int, str] = {}
+    for j in queue:
+        if j["id"] in placed:
+            continue
+        why = scheduler.never_fits(control.req_of(j), machine)
+        if why:
+            out[j["id"]] = why + " (other programs use the rest)"
+    for j in queue:
+        if j["id"] in placed or j["id"] in out:
+            continue
+        stuck = [d for d in j.get("waiting_for") or [] if d in out]
+        out[j["id"]] = (
+            f"waits for job {', '.join(map(str, stuck))}, which can't start either"
+            if stuck
+            else "a job it waits for has no expected end (no estimate, or past it)"
+        )
+    return out
+
+
+def timeline(con, running: list[dict], queue: list[dict], placed: dict, machine=None) -> dict:
     """What runs on which GPU and when: running jobs (end = expected end or
-    None) and the queued jobs the forecast can place. Times are unix seconds."""
+    None) and the queued jobs the forecast can place. Times are unix seconds.
+    ``why`` says, for each job that can't be placed, why not."""
     now = time.time()
     items = []
     for j in running:
@@ -388,7 +410,16 @@ def timeline(con, running: list[dict], queue: list[dict], placed: dict) -> dict:
             start, gpus, end = placed[j["id"]]
             items.append({"id": j["id"], "gpus": gpus, "start": start, "end": end, "state": "queued"})
     unplaced = [j["id"] for j in queue if j["id"] not in placed]
-    return {"now": now, "items": items, "unplaced": unplaced}
+    why = unplaced_reasons(queue, placed, machine) if machine is not None and unplaced else {}
+    never = [j["id"] for j in queue if j["id"] in why and scheduler.never_fits(control.req_of(j), machine)]
+    # why: job id -> why it can't be placed; never: jobs that can't start until other programs free memory
+    return {
+        "now": now,
+        "items": items,
+        "unplaced": unplaced,
+        "why": {str(k): v for k, v in why.items()},
+        "never": never,
+    }
 
 
 def status_data(con, cfg) -> dict:
@@ -444,7 +475,7 @@ def status_data(con, cfg) -> dict:
         "queue": q,
         "recent": [job_public(con, j) for j in db.recent(con, 5)],
         "cpu": control.cpu_reading(con),
-        "timeline": timeline(con, running, queue, placed),
+        "timeline": timeline(con, running, queue, placed, control.live_machine(cfg, con)),
         "_est": est,
         "_spans": spans,
     }
@@ -470,6 +501,7 @@ def cmd_status(a) -> int:
     s = status_data(con, cfg)
     est = s.pop("_est")
     est_spans = s.pop("_spans")
+    why, never = s["timeline"]["why"], s["timeline"]["never"]
     if a.json:
         _print_json(s)
         return 0
@@ -521,10 +553,14 @@ def cmd_status(a) -> int:
             start = fmt_start(est.get(j["id"]), mode, est_spans.get(j["id"]))
             if j["waiting_for"] and est.get(j["id"]) is None:
                 start = "after job " + ",".join(map(str, j["waiting_for"]))
+            if j["id"] in never:
+                start = "can't start (see below)"
             print(
                 f"  {j['position']:>3}  {j['id']:<4} {j['preset']:<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
                 f"{trunc(start, 29):<29} {trunc(j['command'], 34)}{flag}"
             )
+        for jid in never:
+            print(f"  job {jid} can't start: it {why[str(jid)]}.")
     else:
         print("Queue empty")
     if s["recent"] and not a.short:

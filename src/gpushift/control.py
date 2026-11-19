@@ -59,13 +59,25 @@ def ram_need(con, j: dict) -> int | None:
     return int(max(r["peak_ram_mb"] for r in rows) * PACK_MARGIN + PACK_EXTRA_MB)
 
 
-def ram_booked(need: int | None, j: dict, now_mb: int | None) -> int | None:
-    """RAM a running job is booked at: its expected need, but never less than
-    what it uses now or already used at its peak in this run (a job with no
-    known need is booked at least RAM_UNKNOWN_MB, since it may still grow)."""
+RAM_SETTLE_SECONDS = 1800  # after this long, a running job is booked near the RAM it has used
+
+
+def ram_booked(need: int | None, j: dict, now_mb: int | None, now: float | None = None) -> int | None:
+    """RAM a running job is booked at: its expected need (a job with no known
+    need: at least RAM_UNKNOWN_MB, since it may still grow), but never less than
+    what it uses now or already used at its peak in this run.
+
+    Once it has run RAM_SETTLE_SECONDS, its peak so far is a good guide: it is
+    booked at that peak plus the usual margin, if that is less than its need,
+    so a generous --ram or the unknown-job default stops holding RAM it never
+    uses."""
     seen = max(now_mb or 0, j.get("peak_ram_mb") or 0)
     if need is None:
-        return max(seen, RAM_UNKNOWN_MB) if seen else None
+        if not seen:
+            return None
+        need = RAM_UNKNOWN_MB
+    if seen and j.get("started_at") and ran(j, now) >= RAM_SETTLE_SECONDS:
+        need = min(need, int(seen * PACK_MARGIN + PACK_EXTRA_MB))
     return max(need, seen)
 
 
@@ -648,7 +660,7 @@ def plan_inputs(con, now: float | None = None, fair: bool = False, gpus: list[in
         j["vram_need"] = vram_need(con, j)
         j["ram_need"] = ram_need(con, j)
     for j in active:
-        j["ram_need"] = ram_booked(j["ram_need"], j, job_ram.get(j["id"]))
+        j["ram_need"] = ram_booked(j["ram_need"], j, job_ram.get(j["id"]), now)
     running = [(req_of(j), j["gpus"] or []) for j in active]
     speeds = gpu_speeds(con)
     remaining = {j["id"]: time_left(con, j, now, speeds, which=which) for j in active}
