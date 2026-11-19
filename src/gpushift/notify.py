@@ -55,12 +55,38 @@ def job_ended(j: dict) -> tuple[str, str]:
     return f"gpushift: {what} failed", (j.get("note") or f"exit code {j.get('exit_code')}")[:200]
 
 
+QUICK_SHARE = 0.1  # a job done in less than this share of its --eta probably did little
+
+
+def _dur(sec: float) -> str:
+    sec = int(max(sec, 0))
+    if sec < 60:
+        return f"{sec}s"
+    h, m = divmod(sec // 60, 60)
+    return f"{h}h{m:02d}m" if h else f"{m}m"
+
+
+def quick_finish(j: dict) -> str | None:
+    """A warning when a job succeeded far sooner than its --eta: a script that
+    skipped its work or stopped early also exits with 0."""
+    eta, ran = j.get("eta_seconds"), j.get("total_runtime") or 0.0
+    if j["state"] != "done" or not eta or ran >= QUICK_SHARE * eta:
+        return None
+    return (
+        f"it ran only {_dur(ran)} of its {_dur(eta)} --eta. Check its log that it really did the work "
+        "(it may have skipped it, found nothing to do, or stopped early and still exited with 0) "
+        "before you use its results"
+    )
+
+
 def for_agent(jobs: list[dict]) -> str:
     """The note added to a Claude session when its jobs end."""
     lines = []
     for j in jobs:
         title, body = job_ended(j)
         detail = "" if j["state"] == "done" else f": {body}"
+        quick = quick_finish(j)
+        detail += f". Warning: {quick}" if quick else ""
         lines.append(f"- {title.removeprefix('gpushift: ')}{detail}. Output: `gpushift logs {j['id']}`")
     head = (
         "Update from the gpushift GPU queue: a job you submitted has ended."

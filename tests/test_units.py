@@ -391,3 +391,16 @@ def test_cpu_reading():
     assert len(r["top"]) <= cpustat.TOP and all(t["pct"] > 0 and t["name"] for t in r["top"])
     assert r["disks"] and all(0 <= d["free_mb"] <= d["total_mb"] for d in r["disks"])
     assert r["io"] is None or (r["io"]["read_mb_s"] >= 0 and r["io"]["write_mb_s"] >= 0)
+
+
+def test_agents_are_warned_when_a_job_succeeds_far_sooner_than_its_eta():
+    from gpushift import notify
+
+    j = {"id": 12, "tag": "sft", "state": "done", "command": "python train.py", "eta_seconds": 3600,
+         "total_runtime": 14.0}  # fmt: skip
+    msg = notify.for_agent([j])
+    assert "Warning: it ran only 14s of its 1h00m --eta" in msg
+    assert msg.count("..") == 0
+    assert notify.quick_finish({**j, "total_runtime": 400.0}) is None  # over 10% of the --eta
+    assert notify.quick_finish({**j, "eta_seconds": None}) is None  # nothing to compare with
+    assert notify.quick_finish({**j, "state": "failed"}) is None  # failures are reported anyway

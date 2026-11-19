@@ -690,6 +690,9 @@ def cmd_wait(a) -> int:
             print(f"job {a.id} {j['state']} (exit code {j['exit_code']}{extra})")
             if j["state"] == "failed" and j["note"]:
                 print(j["note"])
+            quick = notify.quick_finish(j)
+            if quick:
+                print(f"Warning: {quick}.")
             with db.tx(con):  # the caller now knows; no need to notify the session again
                 db.update(con, a.id, notified=1)
             return 0 if j["state"] == "done" else (j["exit_code"] or 1)

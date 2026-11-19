@@ -38,7 +38,9 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
    next of your jobs ends and says how it went, which wakes you up even if you were
    idle. Then read `gpushift logs <id>`, act on the result, and start `gpushift wait`
    in the background again if more of your jobs are queued or running. One such wait
-   is enough for all your jobs. Meanwhile, carry on with other work.
+   is enough for all your jobs. Meanwhile, carry on with other work. If it warns that
+   a job ran far shorter than its `--eta`, check its log for the work before
+   trusting its results: a job that skipped its work also exits with 0.
 8. **Make new training scripts resumable** with `gpushift.checkpoint` (below), so the
    user can free the GPUs without losing progress. If a job is safe to stop and run
    again from the start (an eval that skips tasks it already finished, a benchmark,

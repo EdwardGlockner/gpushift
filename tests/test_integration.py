@@ -170,7 +170,10 @@ def test_job_dies_while_frozen(q):
 def test_after_waits_for_a_job_and_is_cancelled_when_it_fails(q):
     import json
 
-    train = q.submit("--one", "--", PY, "-c", "import time; time.sleep(3); print('trained')")
+    # train runs until the test has looked at the queue (a fixed sleep raced a busy machine)
+    gate = q.home / "train-may-finish"
+    wait = f"import os, time\nwhile not os.path.exists({str(gate)!r}): time.sleep(0.1)\nprint('trained')"
+    train = q.submit("--one", "--", PY, "-c", wait)
     ev = q.submit("--light", "--after", str(train), "--", PY, "-c", "print('evaluated')")
     doomed = q.submit("--cpu", "--", PY, "-c", "import time; time.sleep(2); raise SystemExit(1)")
     never = q.submit("--cpu", "--after", f"{train},{doomed}", "--", PY, "-c", "print('never')")
@@ -181,6 +184,8 @@ def test_after_waits_for_a_job_and_is_cancelled_when_it_fails(q):
     q.wait_state(doomed, "failed")
     q.wait_state(never, "cancelled")
     assert f"job {doomed}" in q.job(never)["note"]
+    assert q.state(ev) == "queued"
+    gate.touch()
     q.wait_state(train, "done")
     q.wait_state(ev, "done")
     assert q.job(ev)["started_at"] >= q.job(train)["ended_at"]
@@ -274,14 +279,18 @@ def test_stop_leaves_running_jobs_alone(q):
 
 
 def test_starvation_guard_two_gpu_job_not_starved(q):
-    # Long enough that it is still running when the assertions below look.
-    first = q.submit("--one", "--", PY, "-c", "import time; time.sleep(8)")
+    # Runs until the assertions below have looked (a fixed sleep raced a busy machine).
+    gate = q.home / "first-may-finish"
+    first = q.submit(
+        "--one", "--", PY, "-c", f"import os, time\nwhile not os.path.exists({str(gate)!r}): time.sleep(0.1)"
+    )
     q.wait_state(first, "running")
     big = q.submit("--two", "--", PY, "-c", "pass")
     smalls = [q.submit("--one", "--", PY, "-c", "import time; time.sleep(2)") for _ in range(3)]
     # GPU 1 is free, but the --two job at the head holds back the --one jobs.
     time.sleep(1.0)
     assert all(q.state(s) == "queued" for s in smalls)
+    gate.touch()
     q.wait_state(big, "done", timeout=30)
     started_big = q.job(big)["started_at"] or q.job(big)["ended_at"]
     for s in smalls:

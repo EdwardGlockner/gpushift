@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- When a job succeeds in under 10% of its `--eta`, the agent that submitted it
+  is told to check its log before trusting the results: a script that skipped
+  its work or stopped early also exits with 0.
+
 ## 0.1.10 (2026-11-19)
 
 - Better runtime estimates. `--eta` is scaled by how long earlier jobs really
