@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.11 (2026-11-19)
 
 - When a job succeeds in under 10% of its `--eta`, the agent that submitted it
   is told to check its log before trusting the results: a script that skipped
