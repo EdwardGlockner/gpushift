@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.10 (2026-11-19)
 
 - Better runtime estimates. `--eta` is scaled by how long earlier jobs really
   ran compared with theirs (per project once it has 5 finished jobs, else over
