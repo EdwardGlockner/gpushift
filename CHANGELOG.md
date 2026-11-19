@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.12 (2026-11-19)
 
 - A job that has run for half an hour is booked near the RAM it has used so
   far (its peak plus a margin) instead of its `--ram` or the 2 GB default, so
