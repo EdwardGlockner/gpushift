@@ -76,14 +76,18 @@ def fmt_clock(ts: float | None) -> str:
     return time.strftime("%a %H:%M", lt)
 
 
-def fmt_start(ts: float | None, mode: str) -> str:
+def fmt_start(ts: float | None, mode: str, span: tuple[float, float] | None = None) -> str:
+    """ "~1h20m (14:52)", or with a span of possible starts "~1h20m (14:40-15:20)"."""
     if mode != "normal":
         return "paused"
     if ts is None:
         return "unknown"
     rel = ts - time.time()
-    if rel < 30:
+    if rel < 30 and not (span and span[1] - time.time() >= 30):
         return "now"
+    if span and fmt_clock(span[0]) != fmt_clock(span[1]):
+        lo = "now" if span[0] - time.time() < 30 else fmt_clock(span[0])
+        return f"~{fmt_dur(rel)} ({lo}-{fmt_clock(span[1])})"
     return f"~{fmt_dur(rel)} ({fmt_clock(ts)})"
 
 
@@ -93,6 +97,16 @@ def iso(ts: float | None) -> str | None:
 
 def trunc(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 3] + "..."
+
+
+def duration_fields(con, j: dict) -> dict:
+    span = control.duration_span(con, j, control.placed_gpus(j), control.gpu_speeds(con))
+    lo, mid, hi = span or (None, None, None)
+    return {
+        "expected_duration_s": None if mid is None else round(mid),
+        # middle half of what earlier runs took; None when that says nothing useful
+        "expected_duration_range_s": [round(lo), round(hi)] if span and hi - lo >= 60 else None,
+    }
 
 
 def job_public(con, j: dict) -> dict:
@@ -116,9 +130,7 @@ def job_public(con, j: dict) -> dict:
         "runtime_s": round(runtime),
         "exit_code": j["exit_code"],
         "eta_s": j["eta_seconds"],
-        "expected_duration_s": (lambda d: None if d is None else round(d))(
-            control.expected_duration(con, j, control.placed_gpus(j), control.gpu_speeds(con))
-        ),
+        **duration_fields(con, j),
         "resumable": control.is_resumable(j),
         "restartable": bool(j["restartable"]),
         "vram_mb": j["vram_mb"],
@@ -299,7 +311,8 @@ def cmd_submit(a) -> int:
     if not a.no_start:
         ensure_daemon(quiet=a.json)
 
-    queue, starts = control.queue_and_starts(con, cfg)
+    spans: dict = {}
+    queue, starts = control.queue_and_starts(con, cfg, spans_out=spans)
     position = next((i + 1 for i, q in enumerate(queue) if q["id"] == jid), None)
     est = starts.get(jid)
     mode = db.get_mode(con)
@@ -310,6 +323,7 @@ def cmd_submit(a) -> int:
                 "preset": preset,
                 "position": position,
                 "est_start": iso(est),
+                "est_start_range": [iso(t) for t in spans[jid]] if jid in spans else None,
                 "mode": mode,
                 "log": str(paths.log_file(jid)),
             }
@@ -329,7 +343,7 @@ def cmd_submit(a) -> int:
     if waits:
         print(f"position {position} of {len(queue)}; starts after job {', '.join(map(str, waits))} has finished")
     else:
-        print(f"position {position} of {len(queue)}, estimated start: {fmt_start(est, mode)}")
+        print(f"position {position} of {len(queue)}, estimated start: {fmt_start(est, mode, spans.get(jid))}")
     if mode != "normal":
         print("note: the queue is paused (free mode); it will start after `gpushift resume`")
     print(f"logs: gpushift logs {jid} -f")
@@ -381,7 +395,8 @@ def status_data(con, cfg) -> dict:
     mode = db.get_mode(con)
     running = db.active(con)
     placed: dict = {}
-    queue, est = control.queue_and_starts(con, cfg, placed)
+    spans: dict = {}
+    queue, est = control.queue_and_starts(con, cfg, placed, spans)
     live = {g.index: g for g in control.gpu_readings(con)}
     gpu_rows = []
     for i in cfg.gpus:
@@ -410,6 +425,8 @@ def status_data(con, cfg) -> dict:
         d["turn"] = j.get("turn", n)  # place in queue order (est_start order can differ)
         d["waiting_for"] = j.get("waiting_for", [])
         d["est_start"] = iso(est.get(j["id"]))
+        # earliest and latest start if jobs run as short/long as the middle half of earlier runs
+        d["est_start_range"] = [iso(t) for t in spans[j["id"]]] if j["id"] in spans else None
         q.append(d)
     return {
         "schema": 1,
@@ -429,6 +446,7 @@ def status_data(con, cfg) -> dict:
         "cpu": control.cpu_reading(con),
         "timeline": timeline(con, running, queue, placed),
         "_est": est,
+        "_spans": spans,
     }
 
 
@@ -451,6 +469,7 @@ def cmd_status(a) -> int:
     con = db.connect()
     s = status_data(con, cfg)
     est = s.pop("_est")
+    est_spans = s.pop("_spans")
     if a.json:
         _print_json(s)
         return 0
@@ -494,17 +513,17 @@ def cmd_status(a) -> int:
     print()
     if s["queue"]:
         print(f"Queue ({len(s['queue'])} waiting)")
-        print(f"  {'pos':>3}  {'id':<4} {'preset':<9} {'tag':<14} {'waiting':>7}  {'est. start':<20} command")
+        print(f"  {'pos':>3}  {'id':<4} {'preset':<9} {'tag':<14} {'waiting':>7}  {'est. start':<29} command")
         raw = {q["id"]: q for q in db.queued(con)}
         for j in s["queue"]:
             waited = time.time() - raw[j["id"]]["submitted_at"] if j["id"] in raw else None
             flag = " (resume)" if j["resume"] else ""
-            start = fmt_start(est.get(j["id"]), mode)
+            start = fmt_start(est.get(j["id"]), mode, est_spans.get(j["id"]))
             if j["waiting_for"] and est.get(j["id"]) is None:
                 start = "after job " + ",".join(map(str, j["waiting_for"]))
             print(
                 f"  {j['position']:>3}  {j['id']:<4} {j['preset']:<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
-                f"{trunc(start, 20):<20} {trunc(j['command'], 40)}{flag}"
+                f"{trunc(start, 29):<29} {trunc(j['command'], 34)}{flag}"
             )
     else:
         print("Queue empty")

@@ -5,6 +5,12 @@
 - Better runtime estimates. `--eta` is scaled by how long earlier jobs really
   ran compared with theirs (per project once it has 5 finished jobs, else over
   all projects), so start times no longer drift when estimates are padded.
+  Runs that ended almost at once (under 10% of their `--eta`) don't count.
+- Estimates come with a span: the middle half of what earlier runs took.
+  `gpushift status` shows start times like `~44m (11:12-11:27)`, the dashboard
+  shows spans for runtimes, starts and when running jobs finish, and the JSON
+  has `expected_duration_range_s` and `est_start_range`. A span wider than 3x
+  is left out.
 - On machines with different GPUs, gpushift learns how much slower each GPU
   runs the same command and estimates a job's runtime for the GPU it runs or
   would run on. Start times and short jobs filling idle GPUs use it.

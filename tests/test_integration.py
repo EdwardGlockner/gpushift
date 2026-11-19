@@ -572,3 +572,28 @@ def test_short_whole_machine_job_runs_before_a_long_one_gpu_job(q):
     from gpushift import paths
 
     assert f"job {short} runs ahead of job {long}" in paths.daemon_log().read_text()
+
+
+def test_status_shows_the_span_of_runtimes_and_starts(q):
+    import datetime as dt
+
+    from gpushift import db
+
+    con = q.con
+    for r in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.01):  # the near-instant run (0.01) is left out
+        db.insert_job(
+            con, state="done", preset="one", n_gpus=1, slots=2, position=0.0, argv=["x"], command="x", cwd=".",
+            env={}, project="elsewhere", eta_seconds=1000, total_runtime=1000 * r, ended_at=1.0,
+        )  # fmt: skip
+    # two run on the two GPUs, the third waits for one of them
+    ids = [q.submit("--one", "--eta", "1h", "--", PY, "-c", "import time; time.sleep(60)") for _ in range(3)]
+    q.wait_state(ids[0], "running")
+    q.wait_state(ids[1], "running")
+    s = json.loads(q.gpushift("status", "--json").stdout)
+    third = next(j for j in s["queue"] if j["id"] == ids[2])
+    assert third["expected_duration_s"] == 2700  # 1 h x the median 0.75
+    assert third["expected_duration_range_s"] == [2250, 3150]  # x 0.625 and 0.875
+    lo, hi = (dt.datetime.fromisoformat(t).timestamp() for t in third["est_start_range"])
+    assert abs((hi - lo) - 900) < 90  # it waits for the first two: their span
+    out = q.gpushift("status").stdout
+    assert "-" in next(line for line in out.splitlines() if f" {ids[2]} " in line)

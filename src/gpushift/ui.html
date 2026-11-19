@@ -207,8 +207,10 @@ function runLine(j) {
   if (j.state === "evicting") return `<span class="state evicting">saving a checkpoint before it stops</span> · ran ${dur(j.runtime_s)}`;
   let t = `running ${dur(j.runtime_s)}`;
   if (exp && j.runtime_s <= exp) {
-    const end = new Date(Date.now() + (exp - j.runtime_s) * 1000).toISOString();
-    t += ` of ~${dur(exp)} · done ~${clock(end)}`;
+    const at = (s) => new Date(Date.now() + Math.max(s - j.runtime_s, 0) * 1000).toISOString();
+    const rng = j.expected_duration_range_s;
+    const span = rng && clock(at(rng[0])) !== clock(at(rng[1])) ? ` (${clock(at(rng[0]))}–${clock(at(rng[1]))})` : "";
+    t += ` of ~${dur(exp)} · done ~${clock(at(exp))}${span}`;
   } else if (exp) {
     t += ` · <span style="color:var(--warn)">over its ~${dur(exp)} estimate</span>`;
   }
@@ -376,6 +378,13 @@ function timelineView(s) {
   return `<div class="tl">${axis}${rowHtml}${note ? `<div class="tl-note">${esc(note)}</div>` : ""}</div>`;
 }
 
+// "~43 min (35–60 min)": the estimate and the middle half of what earlier runs took.
+function takesCell(j) {
+  if (!j.expected_duration_s) return '<span class="muted">unknown</span>';
+  const r = j.expected_duration_range_s;
+  return "~" + dur(j.expected_duration_s) + (r ? ` <span class="muted">(${dur(r[0])}–${dur(r[1])})</span>` : "");
+}
+
 // When a queued job is expected to start, and which jobs before it in the
 // queue it starts ahead of (it is short enough to run first, see the timeline).
 function startsCell(j, queue, free) {
@@ -383,7 +392,10 @@ function startsCell(j, queue, free) {
   if (!j.est_start) return '<span class="muted">unknown</span>';
   const t = Date.parse(j.est_start);
   const passed = queue.filter((o) => o.turn < j.turn && (!o.est_start || Date.parse(o.est_start) > t)).map((o) => o.id);
-  const when = t <= Date.now() + 60e3 ? "now" : "~" + clock(j.est_start);
+  const r = j.est_start_range;
+  const soon = (iso) => Date.parse(iso) <= Date.now() + 60e3;
+  let when = soon(j.est_start) ? "now" : "~" + clock(j.est_start);
+  if (r && clock(r[0]) !== clock(r[1])) when += ` <span class="muted">(${soon(r[0]) ? "now" : clock(r[0])}–${clock(r[1])})</span>`;
   if (!passed.length) return when;
   const tip = `Starts before job ${passed.join(", ")}: it is done or out of the way in time, so it costs them little or nothing.`;
   return `${when} <span class="badge ahead" title="${esc(tip)}">ahead of ${passed.join(", ")}</span>`;
@@ -414,7 +426,7 @@ function render(s) {
       <td class="gripcell"><button class="grip" data-grip="${j.id}" type="button" title="Drag to move it in the queue (or focus it and use the arrow keys)" aria-label="Move job ${j.id}">⠿</button></td>
       <td>${j.turn}</td><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}${j.resume ? " · resumes" : ""}${j.waiting_for && j.waiting_for.length ? ` · after ${j.waiting_for.join(", ")}` : ""}</span></td>
       <td>${esc(who(j))}</td><td>${esc(j.preset)}</td><td title="${esc(ago(j.submitted_at))}">${clock(j.submitted_at)}</td>
-      <td>${j.expected_duration_s ? "~" + dur(j.expected_duration_s) : '<span class="muted">unknown</span>'}</td>
+      <td>${takesCell(j)}</td>
       <td>${startsCell(j, queue, free)}</td>
       <td class="cmd" title="${esc(j.command)}">${esc(j.command)}</td>
       <td class="actions">${cancelBtn(j)}</td></tr>`).join("")}</tbody></table></div>`

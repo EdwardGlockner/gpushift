@@ -221,6 +221,27 @@ def test_eta_is_scaled_by_how_long_jobs_ran_compared_with_it(tmp_path):
     assert control.eta_factor(None, "p") == 1.0
 
 
+def test_span_is_the_middle_half_unless_that_says_nothing():
+    from gpushift import control
+
+    assert control._span([1, 2, 3, 4, 5]) == (2, 3, 4)
+    assert control._span([1, 2, 3, 4]) == (2.5, 2.5, 2.5)  # too few runs: no span
+    assert control._span([1, 1, 2, 10, 10]) == (2, 2, 2)  # 1-10: wider than 3x, so no span
+
+
+def test_fmt_start_with_a_span(monkeypatch):
+    import time as t
+
+    now = t.time()
+    assert cli.fmt_start(now + 3600, "normal") == f"~1h00m ({cli.fmt_clock(now + 3600)})"
+    span = (now + 1800, now + 5400)
+    assert cli.fmt_start(now + 3600, "normal", span) == (
+        f"~1h00m ({cli.fmt_clock(now + 1800)}-{cli.fmt_clock(now + 5400)})"
+    )
+    assert cli.fmt_start(now, "normal", (now, now + 1800)) == f"~0s (now-{cli.fmt_clock(now + 1800)})"
+    assert cli.fmt_start(now + 3600, "free", span) == "paused"
+
+
 def test_ram_need_booking_and_budget(tmp_path):
     from gpushift import control, db
     from gpushift.scheduler import RAM_UNKNOWN_MB

@@ -72,6 +72,7 @@ def status_payload() -> dict:
     con = db.connect()
     s = status_data(con, cfg)
     s.pop("_est", None)
+    s.pop("_spans", None)
     s["recent"] = [job_public(con, j) for j in db.recent(con, RECENT)]
     vram = db.get_kv(con, "job_vram") or {}
     for j in s["running"]:

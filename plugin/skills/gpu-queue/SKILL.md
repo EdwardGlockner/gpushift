@@ -113,9 +113,11 @@ gpushift retry <id>        # requeue a copy of a failed job
 
 `status --json` (schema 1): `mode` (`normal` | `free` | `soft`), `daemon.running`,
 `slots {total, used}`, `gpus[] {index, name, mem_used_mb, mem_total_mb, shared, jobs[]}`,
-`running[]`, `queue[]` (with `position`, `est_start`) and `recent[]`. Each job has
-`id, state, preset, gpus, tag, project, session, command, cwd, runtime_s,
-exit_code, eta_s, expected_duration_s, resumable, evictions, log, note`.
+`running[]`, `queue[]` (with `position`, `est_start`, `est_start_range`) and
+`recent[]`. Each job has `id, state, preset, gpus, tag, project, session, command,
+cwd, runtime_s, exit_code, eta_s, expected_duration_s, expected_duration_range_s,
+resumable, evictions, log, note`. `expected_duration_s` is your `--eta` corrected by
+how long earlier jobs ran compared with theirs; give your honest estimate anyway.
 Your own jobs have `session` equal to your `CLAUDE_CODE_SESSION_ID`.
 
 Job states: `queued`, `running`, `frozen` (paused by the user's free mode; it
