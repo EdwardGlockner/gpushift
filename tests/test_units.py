@@ -230,9 +230,8 @@ def test_span_is_the_middle_half_unless_that_says_nothing():
 
 
 def test_fmt_start_with_a_span(monkeypatch):
-    import time as t
-
-    now = t.time()
+    now = 1_800_000_000.0
+    monkeypatch.setattr(cli.time, "time", lambda: now)
     assert cli.fmt_start(now + 3600, "normal") == f"~1h00m ({cli.fmt_clock(now + 3600)})"
     span = (now + 1800, now + 5400)
     assert cli.fmt_start(now + 3600, "normal", span) == (

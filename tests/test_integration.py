@@ -593,7 +593,7 @@ def test_status_shows_the_span_of_runtimes_and_starts(q):
     third = next(j for j in s["queue"] if j["id"] == ids[2])
     assert third["expected_duration_s"] == 2700  # 1 h x the median 0.75
     assert third["expected_duration_range_s"] == [2250, 3150]  # x 0.625 and 0.875
-    lo, hi = (dt.datetime.fromisoformat(t).timestamp() for t in third["est_start_range"])
+    lo, hi = (dt.datetime.strptime(t, "%Y-%m-%dT%H:%M:%S%z").timestamp() for t in third["est_start_range"])
     assert abs((hi - lo) - 900) < 90  # it waits for the first two: their span
     out = q.gpushift("status").stdout
     assert "-" in next(line for line in out.splitlines() if f" {ids[2]} " in line)
