@@ -79,15 +79,20 @@ def is_running() -> bool:
     return True
 
 
-def start_background(wait: float = 5.0) -> bool:
-    """Start the daemon detached (if not running). Returns True once it is up."""
+def start_background(wait: float = 30.0) -> bool:
+    """Start the daemon detached (if not running). Returns True once it is up,
+    False if it exits first or is not up within ``wait`` seconds. Starting can
+    take many seconds on a busy machine (imports, antivirus scans)."""
     if is_running():
         return True
-    _proc.spawn_detached([_proc.windowless_python(), "-m", "gpushift", "daemon"])
+    p = _proc.spawn_detached([_proc.windowless_python(), "-m", "gpushift", "daemon"])
     deadline = time.time() + wait
     while time.time() < deadline:
         if is_running():
             return True
+        if p.poll() is not None:
+            # It exited: crashed, or lost the race to another daemon that is up now.
+            return is_running()
         time.sleep(0.1)
     return is_running()
 

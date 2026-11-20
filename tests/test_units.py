@@ -434,3 +434,42 @@ def test_jobs_that_cannot_start_say_why():
     assert why[1].startswith("needs 12.0 GB RAM") and "other programs" in why[1]
     assert why[2] == "waits for job 1, which can't start either"
     assert "no expected end" in why[3]
+
+
+class _FakeProc:
+    def __init__(self, exits_after=None):
+        self.polls, self.exits_after = 0, exits_after
+
+    def poll(self):
+        self.polls += 1
+        return 1 if self.exits_after is not None and self.polls >= self.exits_after else None
+
+
+def _fake_start(monkeypatch, proc, up_after=None):
+    """Spawning returns ``proc``; the daemon is up from the ``up_after``-th probe on."""
+    from gpushift import daemon
+
+    probes = {"n": 0}
+
+    def is_running():
+        probes["n"] += 1
+        return up_after is not None and probes["n"] >= up_after
+
+    monkeypatch.setattr(daemon, "is_running", is_running)
+    monkeypatch.setattr(daemon._proc, "spawn_detached", lambda argv: proc)
+    monkeypatch.setattr(daemon._proc, "windowless_python", lambda: "python")
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
+    return daemon
+
+
+def test_start_background_waits_for_a_slow_daemon(monkeypatch):
+    # A daemon that takes many polls to come up (busy machine) counts as started.
+    daemon = _fake_start(monkeypatch, _FakeProc(), up_after=200)
+    assert daemon.start_background(wait=60) is True
+
+
+def test_start_background_gives_up_when_the_daemon_exits(monkeypatch):
+    proc = _FakeProc(exits_after=3)
+    daemon = _fake_start(monkeypatch, proc)
+    assert daemon.start_background(wait=60) is False
+    assert proc.polls == 3  # stopped polling as soon as it exited
