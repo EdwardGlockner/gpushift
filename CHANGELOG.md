@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.14 (2026-11-21)
+
+- Dashboard: a wide queue table scrolls inside its own box instead of making
+  the whole page scroll sideways.
+- Jobs that can't start for lack of the same free RAM share one line on the
+  dashboard and in `gpushift status` instead of one repeated line per job.
+
 ## 0.1.13 (2026-11-21)
 
 - `gpushift submit --gpu 0` (or `--gpu 1070`, part of the name) runs a job only
