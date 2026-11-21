@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.13 (2026-11-21)
 
 - `gpushift submit --gpu 0` (or `--gpu 1070`, part of the name) runs a job only
   on that GPU, for timings that must be comparable. While it waits for its GPU,
@@ -12,6 +12,8 @@
   cancelled automatically.
 - Dashboard: the part of a job's timeline bar past its estimate is drawn as a
   guess, and "ahead of" badges no longer list jobs whose start is unknown.
+- Starting the daemon waits up to 30 s on a slow machine instead of giving up
+  early, and reports at once when it exits instead.
 
 ## 0.1.12 (2026-11-19)
 
