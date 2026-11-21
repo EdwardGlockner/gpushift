@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `gpushift submit --gpu 0` (or `--gpu 1070`, part of the name) runs a job only
+  on that GPU, for timings that must be comparable. While it waits for its GPU,
+  jobs that never get in its way may use the other GPUs.
+- A running job far past its estimate whose log has been silent for half an
+  hour is flagged as looking stuck, with whether it still uses the CPU: in
+  `gpushift status`, on the dashboard, as a desktop notification, and once to
+  the agent that submitted it (`gpushift wait` returns to tell it). Nothing is
+  cancelled automatically.
+- Dashboard: the part of a job's timeline bar past its estimate is drawn as a
+  guess, and "ahead of" badges no longer list jobs whose start is unknown.
+
 ## 0.1.12 (2026-11-19)
 
 - A job that has run for half an hour is booked near the RAM it has used so

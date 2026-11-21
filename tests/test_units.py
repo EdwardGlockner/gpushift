@@ -473,3 +473,92 @@ def test_start_background_gives_up_when_the_daemon_exits(monkeypatch):
     daemon = _fake_start(monkeypatch, proc)
     assert daemon.start_background(wait=60) is False
     assert proc.polls == 3  # stopped polling as soon as it exited
+
+
+def _cfg(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    from gpushift.gpus import GPU
+
+    return config.load([GPU(0, "NVIDIA GeForce GTX 1070", 8192, 0), GPU(1, "NVIDIA GeForce GTX 1060 6GB", 6144, 0)])
+
+
+def test_parse_gpu_pin(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, monkeypatch)
+    assert cli.parse_gpu_pin("0", c, "one", 1) == [0]
+    assert cli.parse_gpu_pin("1070", c, "one", 1) == [0]
+    assert cli.parse_gpu_pin("gtx", c, "one", 1) == [0, 1]  # every GPU whose name matches
+    assert cli.parse_gpu_pin("1, 0", c, "two", 2) == [0, 1]
+    assert cli.gpu_label([0], c) == "GPU 0 (GTX 1070)"
+    for spec, preset, n in [
+        ("5", "one", 1),
+        ("3090", "one", 1),
+        ("0", "cpu", 0),
+        ("0", "exclusive", 2),
+        ("0", "two", 2),
+    ]:
+        with pytest.raises(cli.CLIError):
+            cli.parse_gpu_pin(spec, c, preset, n)
+
+
+def test_stall_needs_a_job_far_past_its_estimate_and_quiet(tmp_path, monkeypatch):
+    import time
+
+    from gpushift import control, db, notify, paths
+
+    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    con = db.connect()
+    now = time.time()
+    with db.tx(con):
+        jid = db.insert_job(
+            con, state="running", preset="cpu", n_gpus=0, slots=1, position=1, argv=["x"], command="x", cwd=".",
+            env={}, eta_seconds=1800, started_at=now - 4 * 3600, session="s1",
+        )  # fmt: skip
+    log = paths.log_file(jid)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("hi\n")
+    j = db.get_job(con, jid)
+    assert control.stall(con, j, now) is None  # it printed just now: slow, not stuck
+    os.utime(log, (now - 4 * 3600, now - 4 * 3600))  # nothing since it started
+    info = control.stall(con, j, now)
+    assert info and round(info["quiet_s"]) == 4 * 3600
+    assert control.stall(con, j, now - 2.6 * 3600) is None  # 1.4 h in: not yet 3x its 30 min estimate
+    assert "probably hung" in notify.stall_text(info, 0.0)
+    assert "8x its ~30m estimate" in notify.stall_text(info, 1.0) and "may be very slow" in notify.stall_text(info, 1.0)
+
+    # Its session hears about it once (the daemon sets stall_note).
+    with db.tx(con):
+        db.update(con, jid, stall_note="it is stuck")
+        assert [x["id"] for x in db.take_stalled(con, "s1")] == [jid]
+        assert db.take_stalled(con, "s1") == [] and db.take_stalled(con, None, jid) == []
+    assert "cancel it with `gpushift cancel <id>`" in notify.stall_for_agent([db.get_job(con, jid)])
+
+
+def test_daemon_flags_a_stuck_job_once(tmp_path, monkeypatch):
+    import time
+
+    from gpushift import daemon, db, paths
+
+    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    monkeypatch.setenv("GPUSHIFT_FAKE_GPUS", "8192,6144")
+    monkeypatch.setenv("GPUSHIFT_NOTIFY_LOG", str(tmp_path / "notes.txt"))
+    (tmp_path / "config.toml").write_text("ui_port = 0\n")
+    con = db.connect()
+    now = time.time()
+    with db.tx(con):
+        jid = db.insert_job(
+            con, state="running", preset="cpu", n_gpus=0, slots=1, position=1, argv=["x"], command="x", cwd=".",
+            env={}, eta_seconds=600, started_at=now - 3 * 3600, tag="probe",
+        )  # fmt: skip
+    log = paths.log_file(jid)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("hi\n")
+    os.utime(log, (now - 3 * 3600, now - 3 * 3600))
+    d = daemon.Daemon()
+    d.check_stalls()  # no CPU reading yet: wait for one
+    assert db.get_job(con, jid)["stall_note"] is None
+    db.set_kv(con, "job_cpu", {str(jid): 0.0})
+    d.check_stalls()
+    d.check_stalls()
+    assert "probably hung" in db.get_job(con, jid)["stall_note"]
+    notes = (tmp_path / "notes.txt").read_text().splitlines()
+    assert len(notes) == 1 and notes[0].startswith("gpushift: job 1 (probe) looks stuck")

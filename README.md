@@ -81,6 +81,14 @@ Useful options:
 - `--after 12`: start only once job 12 has succeeded, e.g. an eval after its
   training run. Use this whenever order matters; otherwise jobs may run side by side.
 - `--restartable`: the job is safe to stop and run again from the start.
+- `--gpu 0` (or `--gpu 1070`, part of the GPU's name): run only on that GPU, for
+  timings you want to compare between runs. The job waits for that GPU even
+  when another one is idle.
+
+A running job that has taken over 3x its estimate (and at least an hour more)
+and printed nothing for half an hour is flagged as looking stuck: in `gpushift
+status`, on the dashboard, in a desktop notification and to the agent that
+submitted it, along with whether it still uses the CPU. gpushift never cancels it.
 
 Jobs run in the folder and environment you submitted them from (including your
 virtualenv), on the GPUs gpushift picked for them. See `gpushift submit --help` for

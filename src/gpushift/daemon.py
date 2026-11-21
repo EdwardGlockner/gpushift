@@ -148,6 +148,7 @@ class Daemon:
         self.cpu: cpustat.Sampler | None = None  # made when a dashboard first asks (slow to set up on Windows)
         self.snap: _proc.Snapshot | None = None  # process tree, taken once per poll
         self.job_pids: dict[int, set[int]] = {}  # job id -> its processes (runner and job), per poll
+        self.cpu_seen: dict[int, tuple[float, float]] = {}  # job id -> (when, CPU seconds its processes had used)
 
     def _cfg_mtime(self) -> float:
         try:
@@ -183,6 +184,8 @@ class Daemon:
         self.measure_ram()
         self.procs = gpus.per_process(set().union(*self.job_pids.values()))
         self.measure_jobs()
+        self.measure_cpu_use()
+        self.check_stalls()
         self.poll_cpu()
 
     def read_job_processes(self) -> None:
@@ -240,6 +243,47 @@ class Daemon:
         db.set_kv(self.con, "job_vram", job_vram)
         self.capacity = control.pack_capacity(self.gpu_state, job_vram, active)
         db.set_kv(self.con, "pack_capacity", self.capacity)
+
+    def measure_cpu_use(self) -> None:
+        """CPU cores each running job keeps busy, between the last two polls
+        (tells a job that is hung from one that is slow)."""
+        cores: dict[int, float] = {}
+        now = time.time()
+        try:
+            for jid, pids in self.job_pids.items():
+                used = _proc.tree_cpu_seconds(pids)
+                prev = self.cpu_seen.get(jid)
+                self.cpu_seen[jid] = (now, used)
+                if prev and now > prev[0]:
+                    cores[jid] = round(max(0.0, used - prev[1]) / (now - prev[0]), 2)
+            self.cpu_seen = {k: v for k, v in self.cpu_seen.items() if k in self.job_pids}
+        except Exception:  # never let a reading stop the scheduler
+            log.exception("CPU use reading failed")
+        db.set_kv(self.con, "job_cpu", cores)
+
+    def check_stalls(self) -> None:
+        """Note, once per job, when a running job looks stuck: its session hears
+        about it (hook, gpushift wait) and the desktop shows it. Nothing is cancelled."""
+        try:
+            cores = db.get_kv(self.con, "job_cpu", {}) or {}
+            speeds = control.gpu_speeds(self.con)
+            now = time.time()
+            for j in db.active(self.con):
+                if j.get("stall_note"):
+                    continue
+                info = control.stall(self.con, j, now, speeds)
+                c = cores.get(str(j["id"]), cores.get(j["id"]))
+                if info is None or c is None:
+                    continue
+                note = notify.stall_text(info, c)
+                with db.tx(self.con):
+                    db.update(self.con, j["id"], where_state="running", stall_note=note)
+                log.warning("job %s looks stuck: %s", j["id"], note)
+                if self.cfg.notify_desktop != "off":
+                    what = f"job {j['id']} ({j['tag']})" if j.get("tag") else f"job {j['id']}"
+                    notify.desktop(f"gpushift: {what} looks stuck", note[:200])
+        except Exception:  # never let a check stop the scheduler
+            log.exception("stall check failed")
 
     def measure_ram(self) -> None:
         """Record how much RAM each active job uses (and its peak while running),

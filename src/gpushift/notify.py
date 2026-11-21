@@ -79,6 +79,40 @@ def quick_finish(j: dict) -> str | None:
     )
 
 
+IDLE_CORES = 0.05  # a job using less CPU than this (in cores) is doing nothing
+
+
+def stall_text(info: dict, cores: float | None = None) -> str:
+    """Why a running job looks stuck (info: control.stall), and whether it
+    still uses the CPU (cores: CPU cores its processes use, if measured)."""
+    times = info["ran_s"] / info["expected_s"]
+    t = (
+        f"it has run {_dur(info['ran_s'])}, {times:.0f}x its ~{_dur(info['expected_s'])} estimate, "
+        f"and printed nothing for {_dur(info['quiet_s'])}"
+    )
+    if cores is None:
+        return t
+    if cores < IDLE_CORES:
+        return t + "; it uses no CPU, so it is probably hung"
+    return t + f"; it still keeps {cores:.1f} CPU cores busy, so it may be very slow rather than hung"
+
+
+def stall_for_agent(jobs: list[dict]) -> str:
+    """The note added to a Claude session when one of its jobs looks stuck."""
+    lines = []
+    for j in jobs:
+        what = f"job {j['id']} ({j['tag']})" if j.get("tag") else f"job {j['id']}"
+        lines.append(f"- {what}: {j['stall_note']}.")
+    return (
+        "Warning from the gpushift GPU queue: "
+        + ("a job you submitted looks stuck" if len(jobs) == 1 else f"{len(jobs)} jobs you submitted look stuck")
+        + ".\n"
+        + "\n".join(lines)
+        + "\nCheck its output with `gpushift logs <id>`. If it is stuck (or its settings make it far too slow), "
+        "cancel it with `gpushift cancel <id>` so the queue can move on; gpushift never cancels it by itself."
+    )
+
+
 def for_agent(jobs: list[dict]) -> str:
     """The note added to a Claude session when its jobs end."""
     lines = []

@@ -42,6 +42,51 @@ def parse_duration(s: str) -> int:
     return int(total)
 
 
+def parse_gpu_pin(spec: str, cfg, preset: str, n_gpus: int) -> list[int]:
+    """--gpu 0, --gpu 1070, --gpu 0,1: the GPUs a job may run on, by index or
+    by part of the GPU's name (every GPU whose name matches)."""
+    if preset in ("cpu", "exclusive"):
+        raise CLIError(f"--gpu cannot be combined with --{preset}")
+    names = {g.index: g.name for g in cfg.detected}
+    out: list[int] = []
+    for part in (x.strip() for x in spec.split(",")):
+        if not part:
+            continue
+        # A number is a GPU index if there is such a GPU, else part of a name (1070).
+        if part.isdigit() and int(part) in cfg.gpus:
+            hit = [int(part)]
+        else:
+            hit = [i for i in cfg.gpus if part.lower() in names.get(i, "").lower()]
+            if not hit:
+                have = ", ".join(f"{i} ({names.get(i, '?')})" for i in cfg.gpus) or "none"
+                raise CLIError(f"--gpu {part}: no such GPU number, and no GPU's name contains {part!r}; GPUs: {have}")
+        out += [i for i in hit if i not in out]
+    if not out:
+        raise CLIError("--gpu takes GPU numbers or part of a GPU's name, e.g. --gpu 0 or --gpu 1070")
+    if n_gpus > len(out):
+        raise CLIError(f"the job needs {n_gpus} GPUs but --gpu allows only {len(out)} (GPU {', '.join(map(str, out))})")
+    return sorted(out)
+
+
+def preset_col(j: dict) -> str:
+    """'one', or 'one@0' for a job pinned to GPU 0 (--gpu)."""
+    only = j.get("only_gpus") or []
+    return j["preset"] + ("@" + ",".join(map(str, only)) if only else "")
+
+
+def short_gpu_name(name: str) -> str:
+    """'NVIDIA GeForce GTX 1070' -> 'GTX 1070'."""
+    return re.sub(r"^(NVIDIA|AMD)\s+(GeForce\s+|Radeon\s+)?", "", name or "").strip()
+
+
+def gpu_label(gpus: list[int] | None, cfg=None) -> str:
+    """'GPU 0 (GTX 1070)' for a pinned job, '' when it may use any GPU."""
+    if not gpus:
+        return ""
+    names = {g.index: short_gpu_name(g.name) for g in (cfg.detected if cfg else [])}
+    return "GPU " + ", ".join(f"{i} ({names[i]})" if names.get(i) else str(i) for i in gpus)
+
+
 def parse_size(s: str) -> int:
     """'6G', '6GB', '500M', '1.5g'; a bare number means GB. Returns MiB."""
     m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([gm]i?b?)?\s*", s.lower())
@@ -109,6 +154,17 @@ def duration_fields(con, j: dict) -> dict:
     }
 
 
+def stall_public(con, j: dict) -> str | None:
+    """Why a running job looks stuck, right now (see control.stall); None if it doesn't."""
+    if j["state"] != "running":
+        return None
+    info = control.stall(con, j, None, control.gpu_speeds(con))
+    if info is None:
+        return None
+    cores = (db.get_kv(con, "job_cpu", {}) or {}).get(str(j["id"]))
+    return notify.stall_text(info, cores)
+
+
 def job_public(con, j: dict) -> dict:
     runtime = control.ran(j)
     return {
@@ -140,6 +196,8 @@ def job_public(con, j: dict) -> dict:
         "evictions": j["evictions"],
         "resume": bool(j["resume"]),
         "after": j.get("after_ids") or [],
+        "only_gpus": j.get("only_gpus") or [],  # --gpu: the GPUs it may run on; [] = any
+        "stall": stall_public(con, j),  # why it looks stuck, or None
         "log": str(paths.log_file(j["id"])),
         "note": j["note"],
     }
@@ -266,6 +324,7 @@ def cmd_submit(a) -> int:
         raise CLIError(str(e)) from e
     if preset == "light" and cfg.shared_gpu is None:
         raise CLIError("--light needs a shared GPU, but none is configured")
+    only = parse_gpu_pin(a.gpu, cfg, preset, req["n_gpus"]) if a.gpu else None
 
     cwd = os.getcwd()
     check_program_name(cmd)
@@ -306,6 +365,7 @@ def cmd_submit(a) -> int:
             vram_mb=parse_size(a.vram) if a.vram else None,
             ram_mb=parse_size(a.ram) if a.ram else None,
             after_ids=after or None,
+            only_gpus=only,
         )
     paths.job_dir(jid).mkdir(parents=True, exist_ok=True)
     if not a.no_start:
@@ -336,6 +396,8 @@ def cmd_submit(a) -> int:
         "exclusive": "whole machine",
         "cpu": "CPU only",
     }[preset]
+    if only:
+        desc += f", only on {gpu_label(only, cfg)}"
     print(
         f"job {jid} queued ({preset}: {desc}, {req['slots']} slot{'s' if req['slots'] != 1 else ''}) tag={a.tag or project}"
     )
@@ -380,7 +442,7 @@ def unplaced_reasons(queue: list[dict], placed: dict, machine) -> dict[int, str]
             continue
         why = scheduler.never_fits(control.req_of(j), machine)
         if why:
-            out[j["id"]] = why + " (other programs use the rest)"
+            out[j["id"]] = why + (" (other programs use the rest)" if "free" in why else "")
     for j in queue:
         if j["id"] in placed or j["id"] in out:
             continue
@@ -399,11 +461,14 @@ def timeline(con, running: list[dict], queue: list[dict], placed: dict, machine=
     ``why`` says, for each job that can't be placed, why not."""
     now = time.time()
     items = []
+    speeds = control.gpu_speeds(con)
     for j in running:
-        left = control.time_left(con, j, now, control.gpu_speeds(con))
+        left = control.time_left(con, j, now, speeds)
+        exp = control.expected_duration(con, j, control.placed_gpus(j), speeds)
+        # overdue: past its estimate, so the end is only a guess (see time_left)
         items.append(
             {"id": j["id"], "gpus": j["gpus"] or [], "start": j["started_at"], "end": None if left is None else now + left,
-             "state": j["state"]}
+             "state": j["state"], "overdue": exp is not None and control.ran(j, now) > exp}
         )  # fmt: skip
     for j in queue:
         if j["id"] in placed:
@@ -525,7 +590,9 @@ def cmd_status(a) -> int:
         exp = j["expected_duration_s"]
         if j["state"] == "running" and exp and j["runtime_s"] > exp:
             st = f" [over its {fmt_dur(exp)} estimate]"
-        return f"job {j['id']:<4} {j['preset']:<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(j['runtime_s']):>6}{st}  {trunc(j['command'], 50)}"
+        if j["stall"]:
+            st = " [looks stuck, see below]"
+        return f"job {j['id']:<4} {preset_col(j):<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(j['runtime_s']):>6}{st}  {trunc(j['command'], 50)}"
 
     for g in s["gpus"]:
         mem = f"{g['mem_used_mb'] / 1024:.1f}/{g['mem_total_mb'] / 1024:.1f} GB" if g["mem_total_mb"] else ""
@@ -542,6 +609,9 @@ def cmd_status(a) -> int:
             print(f"{label}idle")
         for k, j in enumerate(cpu_jobs):
             print(f"{label if k == 0 else ' ' * len(label)}{job_line(j)}")
+    for j in s["running"]:
+        if j["stall"]:
+            print(f"  job {j['id']} looks stuck: {j['stall']}. Check `gpushift logs {j['id']}`.")
     print()
     if s["queue"]:
         print(f"Queue ({len(s['queue'])} waiting)")
@@ -556,7 +626,7 @@ def cmd_status(a) -> int:
             if j["id"] in never:
                 start = "can't start (see below)"
             print(
-                f"  {j['position']:>3}  {j['id']:<4} {j['preset']:<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
+                f"  {j['position']:>3}  {j['id']:<4} {preset_col(j):<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
                 f"{trunc(start, 29):<29} {trunc(j['command'], 34)}{flag}"
             )
         for jid in never:
@@ -652,6 +722,7 @@ def cmd_retry(a) -> int:
             "restartable",
             "vram_mb",
             "ram_mb",
+            "only_gpus",
         )
         jid = db.insert_job(
             con,
@@ -732,6 +803,12 @@ def cmd_wait(a) -> int:
             with db.tx(con):  # the caller now knows; no need to notify the session again
                 db.update(con, a.id, notified=1)
             return 0 if j["state"] == "done" else (j["exit_code"] or 1)
+        with db.tx(con):
+            stuck = db.take_stalled(con, None, a.id)
+        if stuck:
+            print(notify.stall_for_agent(stuck))
+            print(f"job {a.id} is still running; run `gpushift wait {a.id}` again to keep waiting.")
+            return 3
         if deadline and time.time() > deadline:
             print(f"job {a.id} still {db.get_job(con, a.id)['state']} (timed out waiting)")
             return 124
@@ -762,6 +839,13 @@ def wait_for_mine(a) -> int:
             ended = [db.decode(r) for r in rows]
             for j in ended:
                 db.update(con, j["id"], notified=1)
+            stuck = db.take_stalled(con, session)
+        if stuck and not ended:
+            print(notify.stall_for_agent(stuck))
+            print("It is still running: run `gpushift wait` in the background again to hear when your next job ends.")
+            return 0
+        if stuck:
+            print(notify.stall_for_agent(stuck) + "\n")
         if ended:
             print(notify.for_agent(ended))
             left = open_jobs()
@@ -1080,6 +1164,12 @@ def build_parser() -> argparse.ArgumentParser:
         g.add_argument(f"--{name}", dest="preset", action="store_const", const=name)
     s.add_argument("--gpus", type=int, help="override the number of GPUs")
     s.add_argument("--slots", type=int, help="override the number of slots")
+    s.add_argument(
+        "--gpu",
+        metavar="GPU",
+        help="run only on this GPU, by number or part of its name, e.g. --gpu 0 or --gpu 1070 (several: --gpu 0,1). "
+        "For timings that must be comparable; the job waits for that GPU even when another one is idle",
+    )
     s.add_argument("--tag", help="label (default: project/repo name)")
     s.add_argument("--eta", help="expected runtime, e.g. 40m, 2h, 1h30m")
     s.add_argument(

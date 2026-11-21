@@ -172,6 +172,18 @@ def tree_memory(pids) -> tuple[int, int, int]:
     return res // MiB, priv // MiB, peak // MiB
 
 
+def tree_cpu_seconds(pids) -> float:
+    """CPU seconds (user + system) the given processes have used so far."""
+    total = 0.0
+    for pid in pids:
+        try:
+            t = psutil.Process(pid).cpu_times()
+        except psutil.Error:
+            continue
+        total += t.user + t.system
+    return total
+
+
 def suspend_tree(pid: int | None, ctime: float | None = None) -> bool:
     p = get_proc(pid, ctime)
     if p is None:

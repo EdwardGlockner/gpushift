@@ -24,6 +24,9 @@ Starvation guard (in-order head with reservations)
   estimate, or waiting on jobs without one, are simply held back.
 * A job that wouldn't fit even on an idle machine right now (programs outside
   gpushift use the GPU memory it needs) holds nothing back until it would.
+* Jobs pinned to GPUs (``--gpu``, Req.only) run only there. While only pinned
+  jobs wait, a held-back job on other GPUs may start if it could never keep
+  them from starting (it would leave them enough slots and RAM), see interferes().
 Without the guard, any job that fits may start, like task-spooler.
 
 Dependencies (--after)
@@ -60,6 +63,10 @@ class Req:
     shared: bool = False
     vram: int | None = None  # MiB needed per GPU, if known (makes the job packable)
     ram: int | None = None  # MiB of RAM it needs at its peak (None: unknown, counts as RAM_UNKNOWN_MB)
+    only: tuple[int, ...] | None = None  # the GPUs it may run on (--gpu); None = any
+
+    def allowed(self, gpus: list[int]) -> list[int]:
+        return gpus if self.only is None else [g for g in gpus if g in self.only]
 
     @property
     def barrier(self) -> bool:
@@ -185,17 +192,18 @@ class Usage:
             if m.mem_ok is not None and any(g not in m.mem_ok for g in m.gpus):
                 return None
             return list(m.gpus)
+        gpus = req.allowed(m.gpus)
         if req.shared:
             g = m.shared_gpu
-            if g is not None and g not in self.heavy and g not in self.packed:
-                return [g]
-            # Shared GPU taken by a non-light job: use another GPU that only
-            # light jobs are on, else an idle one, rather than wait.
             if g is None:
                 return None
+            if g in gpus and g not in self.heavy and g not in self.packed:
+                return [g]
+            # Shared GPU taken by a non-light job (or not one this job may use):
+            # use another GPU that only light jobs are on, else an idle one.
             spare = [
                 h
-                for h in m.gpus
+                for h in gpus
                 if h not in self.heavy
                 and h not in self.packed
                 and (self.light.get(h) or m.mem_ok is None or h in m.mem_ok)
@@ -208,7 +216,7 @@ class Usage:
             cap = m.capacity or {}
             fits = [
                 g
-                for g in m.gpus
+                for g in gpus
                 if g not in self.heavy and not self.light.get(g) and self.packed.get(g, 0) + req.vram <= cap.get(g, 0)
             ]
             # Fill GPUs that are already shared first (tightest fit), so whole
@@ -217,7 +225,7 @@ class Usage:
             return sorted(fits[: req.n_gpus]) if len(fits) >= req.n_gpus else None
         free = [
             g
-            for g in m.gpus
+            for g in gpus
             if g not in self.heavy
             and g not in self.packed
             and not self.light.get(g)
@@ -240,11 +248,15 @@ def never_fits(req: Req, machine: Machine) -> str | None:
     Such a job waits until those programs free memory."""
     if machine.ram is not None and ram_of(req) > machine.ram:
         return f"needs {_gb(ram_of(req))} RAM, but only {_gb(machine.ram)} is free for jobs"
+    gpus = req.allowed(machine.gpus)
+    if req.only is not None and len(gpus) < max(req.n_gpus, 1):
+        return f"is pinned to GPU {', '.join(map(str, req.only))}, which gpushift does not use"
     idle = Usage(Machine(machine.gpus, machine.shared_gpu, machine.slots, None, machine.capacity, machine.ram))
     if idle.packable(req) and req.n_gpus > 0:
-        most = max((machine.capacity or {}).values(), default=0)
+        most = max(((machine.capacity or {}).get(g, 0) for g in gpus), default=0)
+        on = f"GPU {', '.join(map(str, req.only))}" if req.only is not None else "a GPU"
         if req.vram > most:
-            return f"needs {_gb(req.vram)} GPU memory, but at most {_gb(most)} is free on a GPU"
+            return f"needs {_gb(req.vram)} GPU memory, but at most {_gb(most)} is free on {on}"
     if idle.fit(req) is None:
         return "does not fit this machine"
     return None
@@ -280,6 +292,36 @@ def reservation(req: Req, ends: list[tuple[Req, list[int], float | None]], machi
     return math.inf
 
 
+INTERFERE_MAX_RUNNING = 10  # past this many running jobs, assume a job could get in the way
+
+
+def interferes(
+    req: Req, gpus: list[int], waiter: Req, ends: list[tuple[Req, list[int], float | None]], machine: Machine
+) -> bool:
+    """Whether running ``req`` on ``gpus`` could ever keep ``waiter`` from
+    starting, whatever order the jobs in ``ends`` finish in.
+
+    Only a waiter pinned to GPUs that req does not use can be shown safe (it
+    then only competes for slots and RAM, checked for every set of jobs still
+    running); for any other waiter this answers True, which keeps the guard's
+    usual rule (req must end before the waiter could start)."""
+    if waiter.only is None or req.exclusive or waiter.exclusive or set(gpus) & set(waiter.allowed(machine.gpus)):
+        return True
+    if len(ends) > INTERFERE_MAX_RUNNING:
+        return True
+    for mask in range(1 << len(ends)):
+        u = Usage(machine)
+        for i, (r, g, _) in enumerate(ends):
+            if mask >> i & 1:
+                u.add(r, g)
+        if u.fit(waiter) is None:
+            continue
+        u.add(req, gpus)
+        if u.fit(waiter) is None:
+            return True
+    return False
+
+
 def plan(
     queued: list[Req],
     running: list[tuple[Req, list[int]]],
@@ -307,6 +349,7 @@ def plan(
     starts: list[tuple[int, list[int]]] = []
     barrier_waiting = gpu_waiting = False
     deadline = math.inf  # held-back jobs must be done by then
+    waiters: list[Req] = []  # the jobs holding the others back
 
     def start(req: Req, g: list[int]) -> None:
         u.add(req, g)
@@ -317,7 +360,10 @@ def plan(
         g = u.fit(req)
         if guard and (barrier_waiting or (gpu_waiting and req.uses_gpu)):
             dur = None if g is None else on_gpus(per_gpu, req.id, g, durations.get(req.id))
-            if g is not None and dur is not None and dur <= deadline < math.inf:
+            if g is not None and (
+                (dur is not None and dur <= deadline < math.inf)
+                or not any(interferes(req, g, w, ends, machine) for w in waiters)
+            ):
                 start(req, g)
             continue
         if g is None:
@@ -327,6 +373,7 @@ def plan(
             short = u.ram_short(req)
             if guard and (req.barrier or req.uses_gpu or short) and idle.fit(req) is not None:
                 deadline = min(deadline, reservation(req, ends, machine))
+                waiters.append(req)
                 # Every job takes RAM, so one waiting for RAM holds back all of them.
                 barrier_waiting = barrier_waiting or req.barrier or short
                 gpu_waiting = gpu_waiting or req.uses_gpu
@@ -446,7 +493,7 @@ class Reorder:
 
 
 def _shape(r: Req) -> tuple:
-    return (r.n_gpus, r.slots, r.exclusive, r.shared, r.vram, r.ram)
+    return (r.n_gpus, r.slots, r.exclusive, r.shared, r.vram, r.ram, r.only)
 
 
 def reorder(

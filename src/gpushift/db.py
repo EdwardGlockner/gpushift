@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     frozen_at REAL,
     paused_s REAL NOT NULL DEFAULT 0, -- seconds the current run spent frozen
     after_ids TEXT,                   -- JSON list: jobs that must finish first (--after)
+    only_gpus TEXT,                   -- JSON list: the GPUs it may run on (--gpu); NULL = any
+    stall_note TEXT,                  -- why the daemon thinks it may be stuck (set once)
+    stall_told INTEGER NOT NULL DEFAULT 0,  -- its session was told it may be stuck
     evict_requested_at REAL,
     total_runtime REAL NOT NULL DEFAULT 0,
     note TEXT
@@ -65,7 +68,7 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 
 ACTIVE = ("running", "frozen", "evicting")
 FINAL = ("done", "failed", "cancelled")
-JSON_FIELDS = ("argv", "env", "gpus", "after_ids")
+JSON_FIELDS = ("argv", "env", "gpus", "after_ids", "only_gpus")
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -91,6 +94,9 @@ ADDED_COLUMNS = [
     ("after_ids", "TEXT"),
     ("ram_mb", "INTEGER"),
     ("peak_ram_mb", "INTEGER"),
+    ("only_gpus", "TEXT"),
+    ("stall_note", "TEXT"),
+    ("stall_told", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -253,3 +259,18 @@ def single_gpu_runs(con, limit: int) -> list[tuple[str, str | None, int, float]]
         if len(g) == 1:
             out.append((r["command"], r["project"], g[0], r["total_runtime"]))
     return out
+
+
+def take_stalled(con, session: str | None, job_id: int | None = None) -> list[dict]:
+    """This session's running jobs (or just job ``job_id``) the daemon flagged
+    as possibly stuck and nobody was told about; marks them as told (call
+    inside a tx)."""
+    sql = "SELECT * FROM jobs WHERE state='running' AND stall_note IS NOT NULL AND stall_told=0 AND "
+    rows = con.execute(
+        sql + ("id=?" if job_id is not None else "session IS ?") + " ORDER BY id",
+        (job_id if job_id is not None else session,),
+    ).fetchall()
+    jobs = [decode(r) for r in rows]
+    for j in jobs:
+        update(con, j["id"], stall_told=1)
+    return jobs

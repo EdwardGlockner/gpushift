@@ -40,7 +40,10 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
    in the background again if more of your jobs are queued or running. One such wait
    is enough for all your jobs. Meanwhile, carry on with other work. If it warns that
    a job ran far shorter than its `--eta`, check its log for the work before
-   trusting its results: a job that skipped its work also exits with 0.
+   trusting its results: a job that skipped its work also exits with 0. If it says
+   a job **looks stuck** (far past its estimate and silent for a long time), read its
+   log; if it is hung or its settings make it hopelessly slow, cancel it yourself
+   with `gpushift cancel <id>` (gpushift never does) and fix the cause before resubmitting.
 8. **Make new training scripts resumable** with `gpushift.checkpoint` (below), so the
    user can free the GPUs without losing progress. If a job is safe to stop and run
    again from the start (an eval that skips tasks it already finished, a benchmark,
@@ -60,6 +63,10 @@ jobs (OOM, slowdowns, corrupt results), so don't do it.
     Likewise **`--ram 12G`** for a job that needs a lot of RAM: a job only starts
     when its RAM fits beside the running jobs (unknown jobs count as 2 GB until
     gpushift has seen one run of them).
+12. **Pin with `--gpu` only when the card matters**, e.g. timings or throughput you
+    will compare with an earlier run on that GPU: `--gpu 0` or `--gpu 1070` (part of
+    the name). A pinned job waits for its GPU even when another one is idle, so
+    don't pin otherwise. `gpushift status` lists each GPU's number and name.
 
 ## Choosing a preset
 
@@ -118,7 +125,8 @@ gpushift retry <id>        # requeue a copy of a failed job
 `running[]`, `queue[]` (with `position`, `est_start`, `est_start_range`) and
 `recent[]`. Each job has `id, state, preset, gpus, tag, project, session, command,
 cwd, runtime_s, exit_code, eta_s, expected_duration_s, expected_duration_range_s,
-resumable, evictions, log, note`. `expected_duration_s` is your `--eta` corrected by
+resumable, evictions, only_gpus, stall, log, note`. `only_gpus` lists the GPUs a
+`--gpu` job may use (`[]`: any); `stall` says why a running job looks stuck (else null). `expected_duration_s` is your `--eta` corrected by
 how long earlier jobs ran compared with theirs; give your honest estimate anyway.
 Your own jobs have `session` equal to your `CLAUDE_CODE_SESSION_ID`.
 

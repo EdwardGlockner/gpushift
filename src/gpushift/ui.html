@@ -76,6 +76,9 @@ button.small { padding: 1px 8px; font-size: 12px; }
   padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
 .tl-bar.queued { background: color-mix(in srgb, var(--c) 30%, var(--bg)); color: var(--ink); border: 1px dashed var(--c); line-height: 20px; }
 .tl-bar.frozen { background: repeating-linear-gradient(135deg, var(--c) 0 6px, color-mix(in srgb, var(--c) 55%, var(--bg)) 6px 12px); }
+/* Past its estimate: solid up to now, then a faint striped guess (--split: where now falls in the bar). */
+.tl-bar.overdue { background: linear-gradient(to right, var(--c) var(--split), transparent var(--split)),
+  repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 35%, var(--bg)) 0 6px, color-mix(in srgb, var(--c) 15%, var(--bg)) 6px 12px); }
 .tl-bar.open { -webkit-mask-image: linear-gradient(to right, #000 75%, transparent); mask-image: linear-gradient(to right, #000 75%, transparent); }
 .tl-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--bad); }
 .tl-note { font-size: 12.5px; color: var(--muted); }
@@ -91,6 +94,8 @@ details.fold[open] > summary { margin-bottom: 8px; }
 .badge.frozen { color: var(--frozen); } .badge.evicting { color: var(--warn); }
 .badge.failed { color: var(--bad); } .badge.done { color: var(--good); } .badge.cancelled { color: var(--muted); }
 .badge.span { color: var(--muted); font-weight: 400; }
+.badge.stuck { color: var(--bad); cursor: help; }
+.stall { color: var(--bad); font-size: 12.5px; margin-top: 2px; }
 .badge.ahead { color: var(--accent); font-weight: 400; margin-left: 4px; cursor: help; }
 .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
@@ -229,11 +234,14 @@ function jobCard(j) {
   const badges = [];
   if (j.state !== "running") badges.push(`<span class="badge ${j.state}">${j.state}</span>`);
   if (j.gpus.length > 1) badges.push(`<span class="badge span">uses GPU ${j.gpus.join(" + ")}</span>`);
+  if (j.only_gpus && j.only_gpus.length) badges.push(`<span class="badge span" title="submitted with --gpu: it only runs there">only GPU ${j.only_gpus.join(", ")}</span>`);
+  if (j.stall) badges.push(`<span class="badge stuck" title="${esc(j.stall)}">looks stuck</span>`);
   const mem = j.vram_now_mb != null ? `${gb(j.vram_now_mb)} GB` : "";
+  const stall = j.stall ? `<div class="stall">Looks stuck: ${esc(j.stall)}. Nothing is cancelled automatically.</div>` : "";
   return `<div class="job" style="--c:${color(j)}">
     <div class="head"><div class="title"><b>${esc(j.tag || "job " + j.id)}</b><span class="muted">job ${j.id} · ${esc(who(j))}</span>${badges.join("")}</div>
       <div class="btns">${logBtn(j)}${cancelBtn(j)}</div></div>
-    <div class="muted">${runLine(j)}${mem ? " · " + mem : ""}</div>
+    <div class="muted">${runLine(j)}${mem ? " · " + mem : ""}</div>${stall}
     ${promptLine(j)}</div>`;
 }
 
@@ -357,9 +365,12 @@ function timelineView(s) {
     const bars = placed.map((i) => {
       const j = jobs[i.id] || { id: i.id };
       const end = i.end ?? t1, left = x(i.start), width = Math.max(0.6, x(end) - left);
-      const when = `${clock(new Date(i.start * 1000).toISOString())} → ${i.end ? clock(new Date(i.end * 1000).toISOString()) : "unknown"}`;
-      const cls = [i.state === "queued" ? "queued" : i.state === "frozen" ? "frozen" : "", i.end ? "" : "open"].join(" ");
-      return `<div class="tl-bar ${cls}" style="--c:${color(j)};left:${left}%;width:${width}%;top:${3 + i.lane * 26}px"
+      let when = `${clock(new Date(i.start * 1000).toISOString())} → ${i.end ? clock(new Date(i.end * 1000).toISOString()) : "unknown"}`;
+      const over = i.overdue && i.end && i.state === "running";
+      if (over) when += `\nPast its ~${dur(j.expected_duration_s)} estimate: the end is only a guess (as long again as it has run).`;
+      const split = over ? Math.min(100, Math.max(0, (100 * (x(now) - left)) / width)) : 0;
+      const cls = [i.state === "queued" ? "queued" : i.state === "frozen" ? "frozen" : "", over ? "overdue" : "", i.end ? "" : "open"].join(" ");
+      return `<div class="tl-bar ${cls}" style="--c:${color(j)};--split:${split}%;left:${left}%;width:${width}%;top:${3 + i.lane * 26}px"
         title="${esc(`job ${i.id} ${j.tag || ""} · ${i.state}\n${when}`)}">${esc(j.tag || "job " + i.id)}</div>`;
     }).join("");
     return `<div class="tl-row"><span class="tl-label">${row.label}</span>
@@ -396,11 +407,13 @@ function takesCell(j) {
 
 // When a queued job is expected to start, and which jobs before it in the
 // queue it starts ahead of (it is short enough to run first, see the timeline).
+// Jobs with no start estimate are left out: their own row already says
+// "unknown", and listing them on every row below would bury the real moves.
 function startsCell(j, queue, free) {
   if (free) return '<span class="muted">paused</span>';
   if (!j.est_start) return '<span class="muted">unknown</span>';
   const t = Date.parse(j.est_start);
-  const passed = queue.filter((o) => o.turn < j.turn && (!o.est_start || Date.parse(o.est_start) > t)).map((o) => o.id);
+  const passed = queue.filter((o) => o.turn < j.turn && o.est_start && Date.parse(o.est_start) > t).map((o) => o.id);
   const r = j.est_start_range;
   const soon = (iso) => Date.parse(iso) <= Date.now() + 60e3;
   let when = soon(j.est_start) ? "now" : "~" + clock(j.est_start);
@@ -434,7 +447,7 @@ function render(s) {
     <th>Queued</th><th>Takes</th><th>Starts</th><th>Command</th><th></th></tr></thead><tbody>${queue.map((j) => `<tr draggable="true" data-id="${j.id}">
       <td class="gripcell"><button class="grip" data-grip="${j.id}" type="button" title="Drag to move it in the queue (or focus it and use the arrow keys)" aria-label="Move job ${j.id}">⠿</button></td>
       <td>${j.turn}</td><td><span class="dot" style="--c:${color(j)}"></span><b>${esc(j.tag || "")}</b> <span class="muted">${j.id}${j.resume ? " · resumes" : ""}${j.waiting_for && j.waiting_for.length ? ` · after ${j.waiting_for.join(", ")}` : ""}</span></td>
-      <td>${esc(who(j))}</td><td>${esc(j.preset)}</td><td title="${esc(ago(j.submitted_at))}">${clock(j.submitted_at)}</td>
+      <td>${esc(who(j))}</td><td>${esc(j.preset)}${j.only_gpus && j.only_gpus.length ? ` <span class="muted" title="submitted with --gpu: it only runs there">· GPU ${j.only_gpus.join(", ")}</span>` : ""}</td><td title="${esc(ago(j.submitted_at))}">${clock(j.submitted_at)}</td>
       <td>${takesCell(j)}</td>
       <td>${startsCell(j, queue, free)}</td>
       <td class="cmd" title="${esc(j.command)}">${esc(j.command)}</td>

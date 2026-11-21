@@ -302,7 +302,9 @@ def notify_session(data: dict) -> str | None:
         jobs = [db.decode(r) for r in rows]
         for j in jobs:
             db.update(con, j["id"], notified=1)
-    return notify.for_agent(jobs) if jobs else None
+        stuck = db.take_stalled(con, session)
+    notes = ([notify.for_agent(jobs)] if jobs else []) + ([notify.stall_for_agent(stuck)] if stuck else [])
+    return "\n\n".join(notes) or None
 
 
 def main(event: str = "pretooluse") -> int:

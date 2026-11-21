@@ -17,8 +17,16 @@ from .scheduler import RAM_UNKNOWN_MB, Machine, Req, reorder, simulate
 def req_of(j: dict) -> Req:
     """The scheduler's view of a job. ``j["vram_need"]`` (set by plan_inputs)
     makes it packable; ``j["ram_need"]`` is the RAM it is booked at."""
+    only = j.get("only_gpus")
     return Req(
-        j["id"], j["n_gpus"], j["slots"], bool(j["exclusive"]), bool(j["shared"]), j.get("vram_need"), j.get("ram_need")
+        j["id"],
+        j["n_gpus"],
+        j["slots"],
+        bool(j["exclusive"]),
+        bool(j["shared"]),
+        j.get("vram_need"),
+        j.get("ram_need"),
+        tuple(only) if only else None,
     )
 
 
@@ -543,6 +551,38 @@ def time_left(
     longer = [h - done for h in _runtimes_on(runs, gpus, speeds or {})]
     longer = [x for x in longer if x > 0]
     return max(statistics.median(longer) if longer else done, OVERRUN_MIN_SECONDS)
+
+
+# A running job may be stuck when it is far past its estimate and has gone quiet.
+STALL_FACTOR = 3.0  # it has run this many times its estimate ...
+STALL_MIN_OVER = 3600.0  # ... and at least this many seconds past it ...
+STALL_QUIET = 1800.0  # ... and its log has not changed for this many seconds
+
+
+def log_quiet(j: dict, now: float | None = None) -> float | None:
+    """Seconds since the job last wrote to its log; None without a log."""
+    try:
+        m = paths.log_file(j["id"]).stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, (time.time() if now is None else now) - m)
+
+
+def stall(con, j: dict, now: float | None = None, speeds: dict[int, float] | None = None) -> dict | None:
+    """{ran_s, expected_s, quiet_s} when a running job looks stuck (see
+    STALL_*), else None. Only a hint: a job can also be silent and slow."""
+    if j["state"] != "running":
+        return None
+    exp = expected_duration(con, j, placed_gpus(j) if speeds is not None else None, speeds)
+    if not exp:
+        return None
+    r = ran(j, now)
+    if r < max(STALL_FACTOR * exp, exp + STALL_MIN_OVER):
+        return None
+    quiet = log_quiet(j, now)
+    if quiet is None or quiet < STALL_QUIET:
+        return None
+    return {"ran_s": r, "expected_s": exp, "quiet_s": quiet}
 
 
 FAIR_WINDOW = 24 * 3600  # how far back GPU time counts toward a session's share

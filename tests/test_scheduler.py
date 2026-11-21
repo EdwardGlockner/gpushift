@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from gpushift.scheduler import Machine, PresetError, Req, plan, preset_requirements, reorder, simulate
+from gpushift.scheduler import Machine, PresetError, Req, never_fits, plan, preset_requirements, reorder, simulate
 
 # ------------------------------------------------------------ presets
 
@@ -448,3 +448,51 @@ def test_reorder_never_moves_a_job_that_waits():
     queue = [(excl(10), Q), (one(12), 16 * H), (excl(11), Q)]
     res = reorder(queue, running, M2, slack=H, after={10: {99}, 11: {99}})
     assert 10 not in res.moved and 11 not in res.moved
+
+
+# ------------------------------------------------------------ --gpu (pinned jobs)
+
+
+def pin(req, *gpus):
+    return Req(req.id, req.n_gpus, req.slots, req.exclusive, req.shared, req.vram, req.ram, tuple(gpus))
+
+
+def test_a_pinned_job_runs_only_on_its_gpu():
+    # GPU 0 is idle, but job 2 may only use GPU 1, which job 1 holds.
+    assert plan([pin(one(2), 1)], [(one(1), [1])], M2) == []
+    assert plan([pin(one(2), 1)], [], M2) == [(2, [1])]
+    # A --light job pinned away from the shared GPU uses the GPU it was given.
+    assert plan([pin(light(3), 0)], [], M2) == [(3, [0])]
+
+
+def test_a_pinned_job_waiting_for_its_gpu_does_not_hold_back_the_other_gpu():
+    # Job 2 waits for GPU 0 (job 1 has no estimate); job 3 can use GPU 1
+    # without ever being in its way, so it starts.
+    running = [(one(1), [0])]
+    assert plan([pin(one(2), 0), one(3)], running, M2) == [(3, [1])]
+    # A waiting job that needs GPU 1 too still holds job 3 back from it.
+    assert plan([two(2), pin(one(3), 1)], running, M2) == []
+
+
+def test_a_pinned_waiter_is_still_protected_from_jobs_that_take_its_ram():
+    m = Machine(gpus=[0, 1], shared_gpu=1, slots=6, ram=10000)
+    running = [(ram(one(1), 4000), [0])]
+    # Job 3 fits on GPU 1 now, but its 5 GB would leave job 2 (6 GB) short
+    # once job 1 ends: held back.
+    assert plan([pin(ram(one(2), 6000), 0), ram(one(3), 5000)], running, m) == []
+    # A 3 GB job leaves room for job 2 in every case: it starts.
+    assert plan([pin(ram(one(2), 6000), 0), ram(one(3), 3000)], running, m) == [(3, [1])]
+
+
+def test_forecast_of_a_pinned_job():
+    # GPU 1 frees first, but job 2 is pinned to GPU 0.
+    running = [(one(1), [0], 600.0), (one(9), [1], 100.0)]
+    est = simulate([(pin(one(2), 0), 60.0), (one(3), 60.0)], running, M2)
+    assert est[2] == 600.0 and est[3] == 100.0
+
+
+def test_a_job_pinned_to_a_gpu_gpushift_does_not_use_never_fits():
+    assert "pinned to GPU 3" in never_fits(pin(one(2), 3), M2)
+    m = Machine(gpus=[0, 1], shared_gpu=1, slots=4, capacity={0: 8000, 1: 6000})
+    assert "on GPU 1" in never_fits(pin(sized(2, 7000), 1), m)
+    assert never_fits(pin(sized(2, 7000), 0), m) is None

@@ -606,3 +606,12 @@ def test_status_shows_the_span_of_runtimes_and_starts(q):
     assert abs((hi - lo) - 900) < 90  # it waits for the first two: their span
     out = q.gpushift("status").stdout
     assert "-" in next(line for line in out.splitlines() if f" {ids[2]} " in line)
+
+
+def test_a_job_submitted_with_gpu_runs_only_there(q):
+    # GPU 0 is idle, but the job asked for GPU 1.
+    jid = q.submit("--one", "--gpu", "1", *ticker(20))
+    q.wait_state(jid, "running", "done")
+    assert q.job(jid)["gpus"] == [1] and q.job(jid)["only_gpus"] == [1]
+    s = json.loads(q.gpushift("status", "--json").stdout)
+    assert next(j for j in s["running"] + s["recent"] if j["id"] == jid)["only_gpus"] == [1]
