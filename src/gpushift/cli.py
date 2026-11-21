@@ -455,6 +455,35 @@ def unplaced_reasons(queue: list[dict], placed: dict, machine) -> dict[int, str]
     return out
 
 
+_RAM_SHORT = re.compile(r"needs ([\d.]+) GB RAM, but (.*)")
+
+
+def never_lines(never: list[int], why: dict) -> list[str]:
+    """One line per job that can't start, except that jobs held up by the same
+    RAM shortage share a line instead of repeating it for each job."""
+    lines: list[str] = []
+    short: dict[str, list[tuple[int, float]]] = {}
+    for jid in never:
+        reason = why[str(jid)] if str(jid) in why else why[jid]
+        m = _RAM_SHORT.fullmatch(reason)
+        if m:
+            short.setdefault(m[2], []).append((jid, float(m[1])))
+        else:
+            lines.append(f"job {jid} can't start: it {reason}.")
+    for tail, group in short.items():
+        if len(group) == 1:
+            jid, gb = group[0]
+            lines.append(f"job {jid} can't start: it needs {gb:.1f} GB RAM, but {tail}.")
+            continue
+        lo, hi = min(g for _, g in group), max(g for _, g in group)
+        need = f"{lo:.1f} GB" if lo == hi else f"{lo:.1f}–{hi:.1f} GB"
+        ids = ", ".join(str(j) for j in sorted(j for j, _ in group))
+        lines.append(
+            f"{len(group)} jobs can't start until RAM frees up: they need {need} each, but {tail}. (Jobs {ids}.)"
+        )
+    return lines
+
+
 def timeline(con, running: list[dict], queue: list[dict], placed: dict, machine=None) -> dict:
     """What runs on which GPU and when: running jobs (end = expected end or
     None) and the queued jobs the forecast can place. Times are unix seconds.
@@ -629,8 +658,8 @@ def cmd_status(a) -> int:
                 f"  {j['position']:>3}  {j['id']:<4} {preset_col(j):<9} {trunc(j['tag'] or '', 14):<14} {fmt_dur(waited):>7}  "
                 f"{trunc(start, 29):<29} {trunc(j['command'], 34)}{flag}"
             )
-        for jid in never:
-            print(f"  job {jid} can't start: it {why[str(jid)]}.")
+        for line in never_lines(never, why):
+            print(f"  {line}")
     else:
         print("Queue empty")
     if s["recent"] and not a.short:

@@ -436,6 +436,17 @@ def test_jobs_that_cannot_start_say_why():
     assert "no expected end" in why[3]
 
 
+def test_jobs_short_of_the_same_ram_share_one_line():
+    tail = "only 3.3 GB is free for jobs (other programs use the rest)"
+    why = {"5": f"needs 6.0 GB RAM, but {tail}", "3": f"needs 4.0 GB RAM, but {tail}",
+           "4": f"needs 4.0 GB RAM, but {tail}", "7": "needs 7.0 GB GPU memory, but at most 6.4 GB is free on a GPU"}  # fmt: skip
+    assert cli.never_lines([5, 3, 4, 7], why) == [
+        "job 7 can't start: it needs 7.0 GB GPU memory, but at most 6.4 GB is free on a GPU.",
+        f"3 jobs can't start until RAM frees up: they need 4.0–6.0 GB each, but {tail}. (Jobs 3, 4, 5.)",
+    ]
+    assert cli.never_lines([5], why) == [f"job 5 can't start: it needs 6.0 GB RAM, but {tail}."]
+
+
 class _FakeProc:
     def __init__(self, exits_after=None):
         self.polls, self.exits_after = 0, exits_after
