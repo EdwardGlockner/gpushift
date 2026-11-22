@@ -227,7 +227,7 @@ def test_overdue_running_job_still_lets_short_jobs_use_idle_gpus(tmp_path):
                   **(common | {"n_gpus": 2}))  # fmt: skip
     db.insert_job(con, state="queued", preset="one", position=2.0, command="c", eta_seconds=300, **common)
     left = control.time_left(con, db.get_job(con, 1), now=1900.0)
-    assert left == 900.0  # not unknown
+    assert left == control.OVERRUN_MIN_SECONDS  # not unknown
     running, remaining = [(one(1), [0])], {1: left}
     assert plan([two(2), one(3)], running, M2, durations={3: 300.0}, remaining=remaining) == [(3, [1])]
 

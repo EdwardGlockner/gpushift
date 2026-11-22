@@ -132,8 +132,9 @@ def test_time_left_once_overdue():
 
     j = {"eta_seconds": 600, "total_runtime": 0.0, "state": "running", "started_at": 1000.0}
     assert control.time_left(None, j, now=1100.0) == 500.0
-    # past its estimate with no history: as long again as it has run, at least 5 min
-    assert control.time_left(None, j, now=1700.0) == 700.0
+    # past its estimate with no history: a fifth of how long it has run, at least 5 min
+    assert control.time_left(None, j, now=4000.0) == 600.0
+    assert control.time_left(None, j, now=1700.0) == control.OVERRUN_MIN_SECONDS
     assert control.time_left(None, {**j, "eta_seconds": 60}, now=1100.0) == control.OVERRUN_MIN_SECONDS
     resumed = {"eta_seconds": 600, "total_runtime": 400.0, "state": "queued", "started_at": None}
     assert control.time_left(None, resumed, now=0.0) == 200.0
@@ -152,7 +153,7 @@ def test_time_left_once_overdue_uses_longer_earlier_runs(tmp_path):
          "started_at": 10_000.0}  # fmt: skip
     assert control.time_left(con, j, now=11_000.0) == 50.0  # still inside the median
     assert control.time_left(con, j, now=11_200.0) == 900.0  # median of 300, 900, 1200 left
-    assert control.time_left(con, j, now=13_000.0) == 3000.0  # longer than any run: as long again
+    assert control.time_left(con, j, now=13_000.0) == 600.0  # longer than any run: a fifth more
     assert control.time_left(con, {**j, "command": "new"}, now=13_000.0) is None  # no estimate at all
 
 

@@ -371,7 +371,7 @@ function timelineView(s) {
       const end = i.end ?? t1, left = x(i.start), width = Math.max(0.6, x(end) - left);
       let when = `${clock(new Date(i.start * 1000).toISOString())} → ${i.end ? clock(new Date(i.end * 1000).toISOString()) : "unknown"}`;
       const over = i.overdue && i.end && i.state === "running";
-      if (over) when += `\nPast its ~${dur(j.expected_duration_s)} estimate: the end is only a guess (as long again as it has run).`;
+      if (over) when += `\nPast its ~${dur(j.expected_duration_s)} estimate: the end is only a guess (a fifth more than it has run so far).`;
       const split = over ? Math.min(100, Math.max(0, (100 * (x(now) - left)) / width)) : 0;
       const cls = [i.state === "queued" ? "queued" : i.state === "frozen" ? "frozen" : "", over ? "overdue" : "", i.end ? "" : "open"].join(" ");
       return `<div class="tl-bar ${cls}" style="--c:${color(j)};--split:${split}%;left:${left}%;width:${width}%;top:${3 + i.lane * 26}px"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15 (2026-11-22)
+
+- A running job past its estimate (with no longer earlier runs to go by) is now
+  expected to need a fifth more than it has run so far, at least 5 minutes,
+  instead of as long again. Jobs queued behind it get more realistic start times.
+
 ## 0.1.14 (2026-11-21)
 
 - Dashboard: a wide queue table scrolls inside its own box instead of making

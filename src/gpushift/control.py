@@ -517,6 +517,7 @@ def expected_duration(
 
 
 OVERRUN_MIN_SECONDS = 300.0  # least time left a job past its estimate counts as
+OVERRUN_FRACTION = 0.2  # else its time left: this share of how long it has run
 
 
 def time_left(
@@ -533,8 +534,9 @@ def time_left(
 
     A job past its estimate still gets one, so jobs behind it can keep using
     idle GPUs: the median time left of earlier runs that lasted at least this
-    long, or else as long again as it has run so far (at least
-    OVERRUN_MIN_SECONDS). It grows each time the job outlives it.
+    long, or else OVERRUN_FRACTION of how long it has run so far (at least
+    OVERRUN_MIN_SECONDS). Most late jobs are only a bit late; the guess grows
+    the longer the job keeps overrunning.
 
     With ``speeds`` (gpu_speeds), the estimate is for the GPUs the job runs on,
     or for ``gpus`` when given (where a queued job would run). ``which``: the
@@ -550,7 +552,7 @@ def time_left(
     runs = db.history_runs(con, j["command"], j["project"], limit=50) if con else []
     longer = [h - done for h in _runtimes_on(runs, gpus, speeds or {})]
     longer = [x for x in longer if x > 0]
-    return max(statistics.median(longer) if longer else done, OVERRUN_MIN_SECONDS)
+    return max(statistics.median(longer) if longer else OVERRUN_FRACTION * done, OVERRUN_MIN_SECONDS)
 
 
 # A running job may be stuck when it is far past its estimate and has gone quiet.
