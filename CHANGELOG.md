@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.16 (2026-11-23)
 
 - Jobs survive `/clear`. The new conversation takes over the jobs that the one
   before it submitted, is told what they are and how far they got, and hears
