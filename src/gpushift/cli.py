@@ -859,6 +859,8 @@ def wait_for_mine(a) -> int:
         ).fetchone()[0]
 
     while True:
+        # After /clear the jobs belong to the new session; a wait started before follows them.
+        session = db.successor(con, session) or session
         with db.tx(con):
             rows = con.execute(
                 "SELECT * FROM jobs WHERE session IS ? AND notified=0 AND state IN ('done','failed','cancelled') "

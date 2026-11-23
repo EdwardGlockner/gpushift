@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+-- The Claude Code process each session runs in. /clear starts a new session
+-- in the same process, which is how its jobs find their way to the new one.
+CREATE TABLE IF NOT EXISTS sessions (
+    session TEXT PRIMARY KEY,
+    claude_pid INTEGER NOT NULL,
+    claude_ctime REAL NOT NULL,
+    seen_at REAL NOT NULL,
+    cleared_into TEXT                 -- the session /clear replaced it with
+);
 """
 
 ACTIVE = ("running", "frozen", "evicting")
@@ -259,6 +268,65 @@ def single_gpu_runs(con, limit: int) -> list[tuple[str, str | None, int, float]]
         if len(g) == 1:
             out.append((r["command"], r["project"], g[0], r["total_runtime"]))
     return out
+
+
+SESSION_KEEP_S = 30 * 86400  # forget sessions not seen for this long
+
+
+def known_session(con, session: str) -> bool:
+    return con.execute("SELECT 1 FROM sessions WHERE session=?", (session,)).fetchone() is not None
+
+
+def remember_session(con, session: str, pid: int, ctime: float) -> None:
+    """Record that ``session`` runs in the Claude process (pid, ctime) (call inside a tx)."""
+    now = time.time()
+    con.execute(
+        "INSERT INTO sessions(session, claude_pid, claude_ctime, seen_at) VALUES(?, ?, ?, ?) "
+        "ON CONFLICT(session) DO UPDATE SET claude_pid=excluded.claude_pid, claude_ctime=excluded.claude_ctime, "
+        "seen_at=excluded.seen_at",
+        (session, pid, ctime, now),
+    )
+    con.execute("DELETE FROM sessions WHERE seen_at < ?", (now - SESSION_KEEP_S,))
+
+
+def hand_over(con, session: str, pid: int, ctime: float) -> tuple[str | None, list[dict]]:
+    """After /clear: ``session`` is new in the Claude process (pid, ctime).
+    Moves the jobs of the session that ran there before (unfinished, or ended
+    but not yet reported) to it. Returns (old session, moved jobs); call inside a tx."""
+    row = con.execute(
+        "SELECT session FROM sessions WHERE claude_pid=? AND ABS(claude_ctime - ?) < 1.0 AND session != ? "
+        "AND cleared_into IS NULL ORDER BY seen_at DESC LIMIT 1",
+        (pid, ctime, session),
+    ).fetchone()
+    remember_session(con, session, pid, ctime)
+    if row is None:
+        return None, []
+    old = row["session"]
+    con.execute("UPDATE sessions SET cleared_into=? WHERE session=?", (session, old))
+    jobs = [
+        decode(r)
+        for r in con.execute(
+            "SELECT * FROM jobs WHERE session=? AND (state NOT IN ('done','failed','cancelled') OR notified=0) "
+            "ORDER BY id",
+            (old,),
+        )
+    ]
+    for j in jobs:
+        update(con, j["id"], session=session)
+        j["session"] = session
+    return old, jobs
+
+
+def successor(con, session: str | None) -> str | None:
+    """The session that /clear (once or several times) replaced ``session`` with, if any."""
+    seen = set()
+    nxt = None
+    while session and session not in seen:
+        seen.add(session)
+        row = con.execute("SELECT cleared_into FROM sessions WHERE session=?", (session,)).fetchone()
+        session = row["cleared_into"] if row else None
+        nxt = session or nxt
+    return nxt
 
 
 def take_stalled(con, session: str | None, job_id: int | None = None) -> list[dict]:

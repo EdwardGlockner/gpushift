@@ -79,6 +79,41 @@ def create_time(pid: int) -> float | None:
         return None
 
 
+def _is_claude(p: psutil.Process) -> bool:
+    name = p.name().lower().removesuffix(".exe")
+    if name == "claude":  # the native build
+        return True
+    if name in ("node", "bun"):  # an npm install runs .../@anthropic-ai/claude-code/cli.js
+        return any("claude-code" in part.replace("\\", "/").lower() for part in p.cmdline()[1:3])
+    return False
+
+
+def claude_process() -> tuple[int, float] | None:
+    """(pid, start time) of the Claude Code process this one runs under: the
+    nearest ancestor that is Claude Code. It stays the same across /clear,
+    which gives the conversation a new session id. ``GPUSHIFT_CLAUDE_PID``
+    names it directly (tests use it)."""
+    fake = os.environ.get("GPUSHIFT_CLAUDE_PID")
+    if fake:
+        ct = create_time(int(fake))
+        return (int(fake), ct) if ct is not None else None
+    try:
+        parent = Snapshot().parent
+    except Exception:
+        return None
+    pid, seen = parent.get(os.getpid()), set()
+    while pid and pid not in seen and len(seen) < 20:
+        seen.add(pid)
+        try:
+            p = psutil.Process(pid)
+            if _is_claude(p):
+                return pid, p.create_time()
+        except psutil.Error:
+            pass
+        pid = parent.get(pid)
+    return None
+
+
 def tree(p: psutil.Process) -> list[psutil.Process]:
     try:
         return [p, *p.children(recursive=True)]

@@ -574,3 +574,41 @@ def test_daemon_flags_a_stuck_job_once(tmp_path, monkeypatch):
     assert "probably hung" in db.get_job(con, jid)["stall_note"]
     notes = (tmp_path / "notes.txt").read_text().splitlines()
     assert len(notes) == 1 and notes[0].startswith("gpushift: job 1 (probe) looks stuck")
+
+
+def test_jobs_follow_a_chain_of_clears(tmp_path, monkeypatch):
+    from gpushift import db
+
+    monkeypatch.setenv("GPUSHIFT_HOME", str(tmp_path))
+    con = db.connect()
+    with db.tx(con):
+        jid = db.insert_job(
+            con, state="running", preset="one", n_gpus=1, slots=1, position=1, argv=["x"], command="x", cwd=".",
+            env={}, session="a",
+        )  # fmt: skip
+        db.remember_session(con, "a", 100, 5000.0)
+        assert db.hand_over(con, "b", 100, 9000.0) == (None, [])  # pid reused by a later process: not the same
+        old, jobs = db.hand_over(con, "c", 100, 5000.4)
+        assert old == "a" and [j["id"] for j in jobs] == [jid]
+        old, jobs = db.hand_over(con, "d", 100, 5000.0)  # cleared again
+        assert old == "c" and db.get_job(con, jid)["session"] == "d"
+    assert db.successor(con, "a") == "d" and db.successor(con, "c") == "d" and db.successor(con, "d") is None
+
+
+def test_claude_process_is_recognised():
+    from gpushift import _proc
+
+    class P:
+        def __init__(self, name, cmdline=()):
+            self._n, self._c = name, list(cmdline)
+
+        def name(self):
+            return self._n
+
+        def cmdline(self):
+            return self._c
+
+    assert _proc._is_claude(P("claude.exe")) and _proc._is_claude(P("claude"))
+    assert _proc._is_claude(P("node", ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"]))
+    assert not _proc._is_claude(P("node", ["node", "server.js", "--dir", "claude-code"]))
+    assert not _proc._is_claude(P("bash.exe")) and not _proc._is_claude(P("Code.exe"))

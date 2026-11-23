@@ -444,6 +444,75 @@ def test_session_is_told_when_its_job_ends(q):
     assert _hook_notify(q, "sess-b").stdout == ""  # other sessions are not told
 
 
+def _hook_clear(q, session, source="clear", claude_pid=None):
+    """The SessionStart hook as Claude Code runs it after /clear, under the Claude process claude_pid."""
+    payload = json.dumps({"session_id": session, "hook_event_name": "SessionStart", "source": source})
+    env = dict(q.env, GPUSHIFT_CLAUDE_PID=str(claude_pid or os.getpid()))
+    r = subprocess.run(
+        [PY, "-m", "gpushift", "hook", "sessionstart"], input=payload, env=env, capture_output=True, text=True,
+        timeout=60,
+    )  # fmt: skip
+    return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+
+def test_jobs_follow_the_conversation_through_clear(q):
+    # Session sess-a, in the Claude process that is this test, submits two jobs.
+    q.env.update(CLAUDE_CODE_SESSION_ID="sess-a", GPUSHIFT_CLAUDE_PID=str(os.getpid()))
+    slow = q.submit("--tag", "sft", "--one", *ticker())
+    bad = q.submit("--cpu", "--", PY, "-c", "raise SystemExit('boom')")
+    assert _hook_notify(q, "sess-a").stdout == ""  # the hook notes which process sess-a runs in
+    q.wait_state(bad, "failed")
+    q.wait_state(slow, "running")
+
+    # /clear: sess-b in the same process gets both, the failure reported at once.
+    note = _hook_clear(q, "sess-b")
+    assert f"job {slow} (sft), running" in note and "still queued or running" in note
+    assert f"job {bad}" in note and "boom" in note and "ended since" in note
+    assert q.job(slow)["session"] == "sess-b" and q.job(bad)["notified"] == 1
+    assert _hook_notify(q, "sess-b").stdout == ""  # the failure is not reported twice
+
+    q.gpushift("cancel", str(slow))
+    q.wait_state(slow, "cancelled")
+    assert _hook_notify(q, "sess-a").stdout == ""  # the old conversation is gone
+    out = json.loads(_hook_notify(q, "sess-b").stdout)["hookSpecificOutput"]["additionalContext"]
+    assert f"job {slow} (sft) was cancelled" in out
+    assert _hook_clear(q, "sess-c") == ""  # a second /clear with nothing left to hand over says nothing
+
+
+def test_clear_hands_over_only_within_the_same_claude_process(q):
+    q.env.update(CLAUDE_CODE_SESSION_ID="sess-a", GPUSHIFT_CLAUDE_PID=str(os.getpid()))
+    jid = q.submit("--one", *ticker())
+    _hook_notify(q, "sess-a")
+    other = subprocess.Popen([PY, "-c", "import time; time.sleep(60)"])  # another Claude window
+    try:
+        assert _hook_clear(q, "sess-x", claude_pid=other.pid) == ""
+    finally:
+        other.kill()
+    assert _hook_clear(q, "sess-y", source="resume") == ""  # only /clear hands jobs over
+    assert _hook_clear(q, "sess-z", source="startup") == ""
+    assert q.job(jid)["session"] == "sess-a"
+
+
+def test_wait_started_before_clear_follows_the_jobs(q):
+    q.env.update(CLAUDE_CODE_SESSION_ID="sess-a", GPUSHIFT_CLAUDE_PID=str(os.getpid()))
+    jid = q.submit("--one", *ticker())
+    _hook_notify(q, "sess-a")
+    waiter = subprocess.Popen(
+        [PY, "-m", "gpushift", "wait"], env=q.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    try:
+        time.sleep(1)
+        assert "still queued or running" in _hook_clear(q, "sess-b")
+        time.sleep(3)  # it must keep waiting, not say "none of your jobs"
+        assert waiter.poll() is None
+        q.gpushift("cancel", str(jid))
+        out, _ = waiter.communicate(timeout=30)
+    finally:
+        waiter.kill()
+    assert f"job {jid}" in out and "cancelled" in out
+    assert q.job(jid)["notified"] == 1
+
+
 def test_desktop_notification_for_failed_job(q, tmp_path):
     log = tmp_path / "toasts.txt"
     q.kill_daemon()

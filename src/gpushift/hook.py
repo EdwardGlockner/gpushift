@@ -294,6 +294,7 @@ def notify_session(data: dict) -> str | None:
     if not session or not paths.db_file().exists():
         return None
     con = db.connect()
+    _remember(con, session)
     with db.tx(con):
         rows = con.execute(
             "SELECT * FROM jobs WHERE session=? AND notified=0 AND state IN ('done','failed','cancelled') ORDER BY id",
@@ -307,12 +308,49 @@ def notify_session(data: dict) -> str | None:
     return "\n\n".join(notes) or None
 
 
+def _remember(con, session: str) -> None:
+    """Note which Claude process this session runs in (once per session), so
+    its jobs can follow it through /clear. Never raises."""
+    from . import _proc, db
+
+    try:
+        if db.known_session(con, session):
+            return
+        proc = _proc.claude_process()
+        if proc:
+            with db.tx(con):
+                db.remember_session(con, session, *proc)
+    except Exception:
+        pass
+
+
+def after_clear(data: dict) -> str | None:
+    """SessionStart after /clear: move the jobs the conversation before it
+    submitted to the new session, and say what they are (its context is gone)."""
+    from . import _proc, db, notify, paths
+
+    session = data.get("session_id")
+    if not session or data.get("source") != "clear" or not paths.db_file().exists():
+        return None
+    proc = _proc.claude_process()
+    if not proc:
+        return None
+    con = db.connect()
+    with db.tx(con):
+        _, jobs = db.hand_over(con, session, *proc)
+        for j in jobs:
+            if j["state"] in db.FINAL:
+                db.update(con, j["id"], notified=1)
+    return notify.after_clear(jobs) if jobs else None
+
+
 def main(event: str = "pretooluse") -> int:
-    if event == "notify":
+    if event in ("notify", "sessionstart"):
         # PostToolUse / UserPromptSubmit: tell the agent about its ended jobs.
+        # SessionStart (after /clear): hand it the jobs of the conversation before.
         try:
             data = json.load(sys.stdin)
-            text = notify_session(data)
+            text = notify_session(data) if event == "notify" else after_clear(data)
         except Exception:
             return 0
         if text:

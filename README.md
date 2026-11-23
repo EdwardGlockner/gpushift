@@ -120,7 +120,8 @@ free or resume; agents can't.
   `accelerate launch`, ...) and shows the agent how to queue them instead. Add
   `# no-queue` to a command to let it through.
 - **Wake-ups**: agents run `gpushift wait` in the background, so a session hears
-  when its jobs end, even if it was idle.
+  when its jobs end, even if it was idle. After `/clear`, the new conversation
+  takes over the jobs of the one before and hears about them too.
 - **Commands**: `/gpushift:queue`, `/gpushift:priority`, `/gpushift:cancel`,
   `/gpushift:free` and `/gpushift:resume`.
 

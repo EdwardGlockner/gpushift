@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Jobs survive `/clear`. The new conversation takes over the jobs that the one
+  before it submitted, is told what they are and how far they got, and hears
+  when they end. A `gpushift wait` started before the clear keeps waiting for
+  them. Only the same Claude Code window takes them over; other windows and
+  resumed conversations do not.
+
 ## 0.1.15 (2026-11-22)
 
 - A running job past its estimate (with no longer earlier runs to go by) is now

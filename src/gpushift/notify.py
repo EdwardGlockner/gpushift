@@ -113,6 +113,38 @@ def stall_for_agent(jobs: list[dict]) -> str:
     )
 
 
+def after_clear(jobs: list[dict]) -> str:
+    """The note added to a session started by /clear: the jobs the
+    conversation before it submitted are now its own."""
+    ended = [j for j in jobs if j["state"] in ("done", "failed", "cancelled")]
+    open_ = [j for j in jobs if j not in ended]
+    parts = []
+    if open_:
+        lines = []
+        for j in open_:
+            what = f"job {j['id']} ({j['tag']})" if j.get("tag") else f"job {j['id']}"
+            lines.append(f"- {what}, {j['state']}: `{j['command'][:160]}`")
+        parts.append(
+            "Note from the gpushift GPU queue: before /clear, this conversation submitted "
+            + ("a job that is" if len(open_) == 1 else f"{len(open_)} jobs that are")
+            + " still queued or running. "
+            + ("It is" if len(open_) == 1 else "They are")
+            + " yours now, and you will be told when "
+            + ("it ends" if len(open_) == 1 else "each one ends")
+            + ".\n"
+            + "\n".join(lines)
+            + "\nIf you are waiting on "
+            + ("it" if len(open_) == 1 else "them")
+            + ", run `gpushift wait` in the background so you are woken up when the next one ends."
+        )
+    if ended:
+        parts.append(
+            "Before /clear, this conversation also submitted jobs that have ended since:\n"
+            + "\n".join(for_agent(ended).splitlines()[1:])
+        )
+    return "\n\n".join(parts)
+
+
 def for_agent(jobs: list[dict]) -> str:
     """The note added to a Claude session when its jobs end."""
     lines = []
