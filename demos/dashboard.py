@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "src" / "gpushift" / "ui.html"
-W, H = 1280, 1225
+W, H = 1280, 1330
 M, HR = 60, 3600
 
 
@@ -77,6 +77,9 @@ def status(now: float) -> dict:
         {"id": 46, "gpus": [0], "start": now + 3 * HR, "end": now + 3 * HR + 40 * M, "state": "queued"},
         {"id": 47, "gpus": [0, 1], "start": now + 3 * HR + 40 * M, "end": now + 3 * HR + 55 * M, "state": "queued"},
     ]
+    starts = {i["id"]: i["start"] for i in items}
+    for j in queue:
+        j["est_start"] = iso(starts[j["id"]])
     gpu = dict(power_limit_w=151, fan_pct=54, shared=False)
     return {
         "schema": 1, "mode": "normal", "mode_since": None,

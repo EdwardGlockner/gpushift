@@ -38,10 +38,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.danger { color: var(--bad); }
 button.small { padding: 1px 8px; font-size: 12px; }
 .gpus { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 12px; }
-.system { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
-.cpu-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
-.cpu-cols > div { display: grid; gap: 12px; align-content: start; }
-@media (max-width: 900px) { .system, .cpu-cols { grid-template-columns: minmax(0, 1fr); } }
+.system { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sys-col { display: grid; gap: 12px; align-content: start; }
+@media (max-width: 900px) { .system { grid-template-columns: minmax(0, 1fr); } }
 .drives { display: grid; gap: 10px; align-content: start; }
 .drive { display: grid; grid-template-columns: 2.6em minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
 .drive .mount { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -284,24 +283,28 @@ function cpuCard(c, jobs, daemonUp) {
   const jobsHtml = jobs.map(jobCard).join("");
   if (!c) return `<div class="card"><div class="top"><b>CPU</b></div><div class="empty">${daemonUp ? "Measuring…" : "No reading: the gpushift daemon isn't running."}</div>${jobsHtml}</div>`;
   const busy = c.load_pct >= 90;
-  const memPct = (100 * c.mem_used_mb) / (c.mem_total_mb || 1);
   return `<div class="card"><div class="top"><b>CPU · ${c.cores_pct.length} cores</b>
       ${busy ? '<span style="color:var(--bad)">busy: programs may be slowed down</span>' : ""}</div>
-    <div class="cpu-cols">
-      <div>
-        <div class="stat"><span class="k">Load, last 5 minutes</span><span class="v" ${busy ? 'style="color:var(--bad)"' : ""}>${val(c.load_pct, "%")}</span>${spark(history.cpu || [])}</div>
-        <div class="stat"><span class="k">Per core</span><div class="cores">${c.cores_pct.map((p) =>
-          `<div class="bar" title="${Math.round(p)}%"><span style="height:${p}%;background:${loadColor(p)}"></span></div>`).join("")}</div></div>
-        <div class="stat"><span class="k">Busiest programs (share of the whole CPU)</span><div class="top5">${c.top.map((t) =>
-          `${progName(t.name)}<span>${t.pct.toFixed(0)}%</span>`).join("") || '<span class="muted">nothing busy</span>'}</div></div>
-      </div>
-      <div>
-        <div class="stat"><span class="k">Memory</span><span class="v">${gb(c.mem_used_mb)}<small> / ${gb(c.mem_total_mb)} GB</small></span>
-          <div class="bar"><span style="width:${memPct}%;background:${memPct >= 90 ? "var(--bad)" : "var(--muted)"}"></span></div></div>
-        ${c.top_mem ? `<div class="stat"><span class="k" title="Memory only that program holds.">Programs using the most memory</span><div class="top5">${c.top_mem.map((t) =>
-          `${progName(t.name)}<span>${memSize(t.mb)}</span>`).join("") || '<span class="muted">no reading</span>'}${memRest(c)}</div></div>` : ""}
-      </div>
+    <div class="sys-col">
+    <div class="stat"><span class="k">Load, last 5 minutes</span><span class="v" ${busy ? 'style="color:var(--bad)"' : ""}>${val(c.load_pct, "%")}</span>${spark(history.cpu || [])}</div>
+    <div class="stat"><span class="k">Per core</span><div class="cores">${c.cores_pct.map((p) =>
+      `<div class="bar" title="${Math.round(p)}%"><span style="height:${p}%;background:${loadColor(p)}"></span></div>`).join("")}</div></div>
+    <div class="stat"><span class="k">Busiest programs (share of the whole CPU)</span><div class="top5">${c.top.map((t) =>
+      `${progName(t.name)}<span>${t.pct.toFixed(0)}%</span>`).join("") || '<span class="muted">nothing busy</span>'}</div></div>
     </div>${jobsHtml}</div>`;
+}
+
+function memCard(c, daemonUp) {
+  if (!c) return `<div class="card"><div class="top"><b>Memory</b></div><div class="empty">${daemonUp ? "Measuring…" : "No reading: the gpushift daemon isn't running."}</div></div>`;
+  const memPct = (100 * c.mem_used_mb) / (c.mem_total_mb || 1), full = memPct >= 90;
+  return `<div class="card"><div class="top"><b>Memory · ${gb(c.mem_total_mb)} GB</b>
+      ${full ? '<span style="color:var(--bad)">almost full</span>' : ""}</div>
+    <div class="sys-col">
+    <div class="stat"><span class="k">In use</span><span class="v" ${full ? 'style="color:var(--bad)"' : ""}>${gb(c.mem_used_mb)}<small> / ${gb(c.mem_total_mb)} GB</small></span>
+      <div class="bar"><span style="width:${memPct}%;background:${full ? "var(--bad)" : "var(--muted)"}"></span></div></div>
+    ${c.top_mem ? `<div class="stat"><span class="k" title="Memory only that program holds.">Programs using the most memory</span><div class="top5">${c.top_mem.map((t) =>
+      `${progName(t.name)}<span>${memSize(t.mb)}</span>`).join("") || '<span class="muted">no reading</span>'}${memRest(c)}</div></div>` : ""}
+    </div></div>`;
 }
 
 function sample(s) {
@@ -467,7 +470,7 @@ function render(s) {
   let html = s.gpus.map((g) => gpuCard(g, g.jobs.map((id) => byId[id]).filter(Boolean))).join("");
   $("gpus").innerHTML = html;
   $("timeline").innerHTML = timelineView(s);
-  $("system").innerHTML = cpuCard(s.cpu, s.running.filter((j) => !j.gpus.length), s.daemon.running) + storageCard(s.cpu, s.daemon.running);
+  $("system").innerHTML = cpuCard(s.cpu, s.running.filter((j) => !j.gpus.length), s.daemon.running) + memCard(s.cpu, s.daemon.running) + storageCard(s.cpu, s.daemon.running);
 
   $("qhead").textContent = `Queue (${s.queue.length} waiting)`;
   const queue = [...s.queue].sort((a, b) => a.turn - b.turn);

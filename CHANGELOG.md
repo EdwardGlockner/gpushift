@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Dashboard: memory has its own card between CPU and storage, instead of
+  sharing the CPU card.
+
 ## 0.1.17 (2026-11-27)
 
 - Dashboard: the CPU card lists the programs using the most memory, next to the
