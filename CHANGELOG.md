@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Dashboard: the CPU card lists the programs using the most memory, next to the
+  busiest ones, with gpushift jobs named. It counts memory only that program
+  holds, the same measure jobs are booked by; an "everything else" row (other
+  programs, the system, shared memory) makes the list add up to the total in
+  use.
+- Fixed on Windows: the busiest-programs list counted only one process of each
+  program, so a program made of many processes (a browser, an editor, several
+  Python jobs) showed far less CPU than it used.
+
 ## 0.1.16 (2026-11-23)
 
 - Jobs survive `/clear`. The new conversation takes over the jobs that the one

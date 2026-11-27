@@ -388,15 +388,26 @@ def test_a_job_cannot_be_moved_ahead_of_a_job_it_waits_for(tmp_path):
 def test_cpu_reading():
     import time
 
-    from gpushift import cpustat
+    from gpushift import _proc, cpustat
 
     s = cpustat.Sampler()
     sum(i * i for i in range(2_000_000))  # some CPU work to show up
     time.sleep(0.2)
-    r = s.sample()
+    ballast = bytearray(300 * 2**20)  # private RAM of this process, to show up as "job 7"
+    r = s.sample({os.getpid(): 7})
     assert 0 <= r["load_pct"] <= 100 and len(r["cores_pct"]) >= 1
     assert 0 < r["mem_used_mb"] <= r["mem_total_mb"]
     assert len(r["top"]) <= cpustat.TOP and all(t["pct"] > 0 and t["name"] for t in r["top"])
+    mem = r["top_mem"]
+    assert 0 < len(mem) <= cpustat.TOP and all(t["mb"] > 0 and t["name"] for t in mem)
+    assert [t["mb"] for t in mem] == sorted((t["mb"] for t in mem), reverse=True)
+    assert sum(t["mb"] for t in mem) <= r["mem_total_mb"]
+    mine = _proc.tree_memory([os.getpid()])[1]
+    assert mine >= len(ballast) // 2**20
+    # Listed under the job's name, unless five programs hold more than this test does.
+    job = next((t["mb"] for t in mem if t["name"] == "job 7"), None)
+    assert job is not None or mem[-1]["mb"] >= mine * 0.8
+    assert job is None or abs(job - mine) <= mine * 0.2
     assert r["disks"] and all(0 <= d["free_mb"] <= d["total_mb"] for d in r["disks"])
     assert r["io"] is None or (r["io"]["read_mb_s"] >= 0 and r["io"]["write_mb_s"] >= 0)
 

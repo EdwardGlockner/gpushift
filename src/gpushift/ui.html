@@ -271,6 +271,15 @@ function gpuCard(g, jobs) {
 
 const loadColor = (p) => (p >= 90 ? "var(--bad)" : p >= 70 ? "var(--warn)" : "var(--accent)");
 
+const progName = (name) => `<span class="name">${name.startsWith("job ") ? `<b>${esc(name)}</b> <span class="muted">(gpushift)</span>` : esc(name)}</span>`;
+const memSize = (mb) => (mb >= 1024 ? `${gb(mb)} GB` : `${mb} MB`);
+// The memory in use that the listed programs don't account for, so the rows add up to the bar.
+function memRest(c) {
+  const rest = c.mem_used_mb - c.top_mem.reduce((s, t) => s + t.mb, 0);
+  if (!c.top_mem.length || rest <= 0) return "";
+  return `<span class="name muted" title="Other programs, Windows or the kernel itself, memory shared between programs, and memory waiting to be written to the page file.">everything else</span><span class="muted">${memSize(rest)}</span>`;
+}
+
 function cpuCard(c, jobs, daemonUp) {
   const jobsHtml = jobs.map(jobCard).join("");
   if (!c) return `<div class="card"><div class="top"><b>CPU</b></div><div class="empty">${daemonUp ? "Measuring…" : "No reading: the gpushift daemon isn't running."}</div>${jobsHtml}</div>`;
@@ -283,12 +292,14 @@ function cpuCard(c, jobs, daemonUp) {
         <div class="stat"><span class="k">Load, last 5 minutes</span><span class="v" ${busy ? 'style="color:var(--bad)"' : ""}>${val(c.load_pct, "%")}</span>${spark(history.cpu || [])}</div>
         <div class="stat"><span class="k">Per core</span><div class="cores">${c.cores_pct.map((p) =>
           `<div class="bar" title="${Math.round(p)}%"><span style="height:${p}%;background:${loadColor(p)}"></span></div>`).join("")}</div></div>
+        <div class="stat"><span class="k">Busiest programs (share of the whole CPU)</span><div class="top5">${c.top.map((t) =>
+          `${progName(t.name)}<span>${t.pct.toFixed(0)}%</span>`).join("") || '<span class="muted">nothing busy</span>'}</div></div>
       </div>
       <div>
         <div class="stat"><span class="k">Memory</span><span class="v">${gb(c.mem_used_mb)}<small> / ${gb(c.mem_total_mb)} GB</small></span>
           <div class="bar"><span style="width:${memPct}%;background:${memPct >= 90 ? "var(--bad)" : "var(--muted)"}"></span></div></div>
-        <div class="stat"><span class="k">Busiest programs (share of the whole CPU)</span><div class="top5">${c.top.map((t) =>
-          `<span class="name">${t.name.startsWith("job ") ? `<b>${esc(t.name)}</b> <span class="muted">(gpushift)</span>` : esc(t.name)}</span><span>${t.pct.toFixed(0)}%</span>`).join("") || '<span class="muted">nothing busy</span>'}</div></div>
+        ${c.top_mem ? `<div class="stat"><span class="k" title="Memory only that program holds.">Programs using the most memory</span><div class="top5">${c.top_mem.map((t) =>
+          `${progName(t.name)}<span>${memSize(t.mb)}</span>`).join("") || '<span class="muted">no reading</span>'}${memRest(c)}</div></div>` : ""}
       </div>
     </div>${jobsHtml}</div>`;
 }

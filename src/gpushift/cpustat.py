@@ -1,10 +1,16 @@
 """CPU, memory and storage readings for the dashboard: load per core, RAM,
-the programs using the most CPU, and each drive's space and disk traffic. The daemon samples every few seconds; a sample
-covers the time since the previous one.
+the programs using the most CPU and the most RAM, and each drive's space and
+disk traffic. The daemon samples every few seconds; a sample covers the time
+since the previous one.
 
-Per-program load comes from the "Process V2" performance counters on Windows
-(one cheap query for all processes; psutil would open every process, which
-takes over a second on a busy machine) and from psutil elsewhere."""
+Per-program load and memory come from the "Process" performance counters on
+Windows (one cheap query for all processes; psutil would open every process,
+which takes over a second on a busy machine) and from psutil elsewhere.
+
+A program's memory is its private RAM: what it holds that the OS can't drop
+and reread (the same measure the scheduler books jobs by, see
+_proc.tree_memory). The programs don't add up to the machine's used RAM: the
+kernel, the file cache and shared pages belong to no program."""
 
 from __future__ import annotations
 
@@ -33,14 +39,17 @@ class Sampler:
         n = len(cores) or 1
         vm = psutil.virtual_memory()
         load: dict[str, float] = {}
-        for pid, name, pct in self._per_process():
-            pct /= n  # share of the whole machine
-            if pct <= 0:
-                continue
+        mem: dict[str, float] = {}
+        for pid, name, pct, private in self._per_process():
             if pid in job_of:
                 name = f"job {job_of[pid]}"
-            load[name] = load.get(name, 0.0) + pct
+            if private > 0:
+                mem[name] = mem.get(name, 0.0) + private
+            pct /= n  # share of the whole machine
+            if pct > 0:
+                load[name] = load.get(name, 0.0) + pct
         top = sorted(((k, v) for k, v in load.items() if v >= 0.05), key=lambda kv: -kv[1])[:TOP]
+        top_mem = sorted(((k, int(v) // 2**20) for k, v in mem.items() if v >= 2**20), key=lambda kv: -kv[1])[:TOP]
         return {
             "at": time.time(),
             "load_pct": round(sum(cores) / n, 1),
@@ -48,6 +57,7 @@ class Sampler:
             "mem_used_mb": (vm.total - vm.available) // 2**20,
             "mem_total_mb": vm.total // 2**20,
             "top": [{"name": k, "pct": round(v, 1)} for k, v in top],
+            "top_mem": [{"name": k, "mb": v} for k, v in top_mem],
             "disks": disks(),
             "io": self._io_rate(),
         }
@@ -71,15 +81,15 @@ class Sampler:
             "write_mb_s": round(max(0, now[2] - last[2]) / dt / 2**20, 1),
         }
 
-    def _per_process(self) -> list[tuple[int, str, float]]:
-        """(pid, name, % of one core) since the last call."""
+    def _per_process(self) -> list[tuple[int, str, float, float]]:
+        """(pid, name, % of one core since the last call, bytes of private RAM)."""
         if self.pdh is not None:
             rows = self.pdh.read()
             if rows is not None:
                 return rows
             self.pdh = None  # counters unavailable: fall back to psutil
         out, seen = [], {}
-        for p in psutil.process_iter(["name"]):
+        for p in psutil.process_iter(["name", "memory_info"]):
             q = self.procs.get(p.pid, p)
             seen[p.pid] = q
             try:
@@ -87,9 +97,18 @@ class Sampler:
             except psutil.Error:
                 continue
             if p.pid:  # pid 0 is the idle process
-                out.append((p.pid, (p.info["name"] or "?").removesuffix(".exe"), pct))
+                out.append((p.pid, (p.info["name"] or "?").removesuffix(".exe"), pct, _private(p.info["memory_info"])))
         self.procs = seen
         return out
+
+
+def _private(mi) -> float:
+    """Bytes of private RAM from a psutil memory_info (None: not readable)."""
+    if mi is None:
+        return 0
+    if os.name == "nt":
+        return min(mi.private, mi.rss)
+    return max(0, mi.rss - getattr(mi, "shared", 0))
 
 
 def disks() -> list[dict]:
@@ -117,8 +136,10 @@ def disks() -> list[dict]:
 
 
 class _Pdh:
-    r"""\Process(*)\% Processor Time, paired with \Process(*)\ID Process by
-    instance name ("chrome", "chrome#1", ...)."""
+    r"""\Process(*)\% Processor Time and \Process(*)\Working Set - Private,
+    paired with \Process(*)\ID Process by position: the counters of one query
+    list the processes in the same order. (Not by instance name: every chrome
+    process is listed as plain "chrome".)"""
 
     def __init__(self):
         import ctypes
@@ -127,16 +148,23 @@ class _Pdh:
         self.ct, self.wt = ctypes, wintypes
         self.lib = ctypes.WinDLL("pdh")
         self.q, self.cpu, self.pid = wintypes.HANDLE(), wintypes.HANDLE(), wintypes.HANDLE()
+        self.mem = wintypes.HANDLE()
         self.ok = (
             self.lib.PdhOpenQueryW(None, None, ctypes.byref(self.q)) == 0
             and self.lib.PdhAddEnglishCounterW(self.q, r"\Process(*)\% Processor Time", None, ctypes.byref(self.cpu))
             == 0
             and self.lib.PdhAddEnglishCounterW(self.q, r"\Process(*)\ID Process", None, ctypes.byref(self.pid)) == 0
         )
+        # Memory is an extra: without it the CPU readings still work.
+        self.mem_ok = self.ok and (
+            self.lib.PdhAddEnglishCounterW(self.q, r"\Process(*)\Working Set - Private", None, ctypes.byref(self.mem))
+            == 0
+        )
         if self.ok:
             self.lib.PdhCollectQueryData(self.q)
 
-    def _values(self, counter) -> dict[str, float] | None:
+    def _values(self, counter) -> list[tuple[str, float]] | None:
+        """(instance name, value) per process, in the order Windows lists them."""
         ct, wt = self.ct, self.wt
 
         class Fmt(ct.Structure):
@@ -149,23 +177,29 @@ class _Pdh:
         size, count = wt.DWORD(0), wt.DWORD(0)
         self.lib.PdhGetFormattedCounterArrayW(counter, fmt, ct.byref(size), ct.byref(count), None)
         if not size.value:
-            return {}
+            return []
         buf = (ct.c_byte * size.value)()
         if self.lib.PdhGetFormattedCounterArrayW(counter, fmt, ct.byref(size), ct.byref(count), buf) != 0:
             return None
         items = ct.cast(buf, ct.POINTER(Item))
-        return {items[i].name: items[i].fmt.value for i in range(count.value)}
+        return [(items[i].name, items[i].fmt.value) for i in range(count.value)]
 
-    def read(self) -> list[tuple[int, str, float]] | None:
+    def read(self) -> list[tuple[int, str, float, float]] | None:
         if not self.ok or self.lib.PdhCollectQueryData(self.q) != 0:
             return None
         cpu, pids = self._values(self.cpu), self._values(self.pid)
-        if cpu is None or pids is None:
+        if cpu is None or pids is None or not _same_processes(cpu, pids):
             return None
+        mem = self._values(self.mem) if self.mem_ok else None
+        if mem is None or not _same_processes(cpu, mem):
+            mem = [("", 0.0)] * len(cpu)
         out = []
-        for inst, pct in cpu.items():
-            pid = int(pids.get(inst, 0))
-            if pid == 0:  # _Total, Idle
+        for (inst, pct), (_, pid), (_, private) in zip(cpu, pids, mem, strict=True):
+            if int(pid) == 0:  # _Total, Idle
                 continue
-            out.append((pid, inst.split("#")[0], pct))
+            out.append((int(pid), inst.split("#")[0], pct, private))
         return out
+
+
+def _same_processes(a: list, b: list) -> bool:
+    return len(a) == len(b) and all(x[0] == y[0] for x, y in zip(a, b, strict=True))

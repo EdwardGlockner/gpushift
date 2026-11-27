@@ -95,6 +95,8 @@ def status(now: float) -> dict:
             "mem_used_mb": 21500, "mem_total_mb": 65536,
             "top": [{"name": "job 41", "pct": 14.0}, {"name": "job 43", "pct": 11.0}, {"name": "code", "pct": 3.0},
                     {"name": "firefox", "pct": 2.0}, {"name": "Xorg", "pct": 1.0}],
+            "top_mem": [{"name": "job 41", "mb": 9200}, {"name": "firefox", "mb": 3400}, {"name": "job 43", "mb": 2900},
+                        {"name": "code", "mb": 1800}, {"name": "gnome-shell", "mb": 610}],
             "disks": [{"mount": "/", "total_mb": 976000, "used_mb": 402000, "free_mb": 574000},
                       {"mount": "/data", "total_mb": 3815000, "used_mb": 2900000, "free_mb": 915000}],
             "io": {"read_mb_s": 212.4, "write_mb_s": 18.9},
