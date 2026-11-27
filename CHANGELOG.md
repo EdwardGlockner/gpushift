@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.17 (2026-11-27)
 
 - Dashboard: the CPU card lists the programs using the most memory, next to the
   busiest ones, with gpushift jobs named. It counts memory only that program
