@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.18 (2026-11-27)
 
 - Dashboard: memory has its own card between CPU and storage, instead of
   sharing the CPU card.
